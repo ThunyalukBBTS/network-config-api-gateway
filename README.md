@@ -50,14 +50,14 @@ docker compose -f docker/docker-compose.yml up -d
 ```bash
 mise migrate
 # or
-bun src/db/migrate.ts
+bun backend/src/db/migrate.ts
 ```
 
 5. Seed database with default users:
 ```bash
 mise seed
 # or
-bun src/db/seed.ts
+bun backend/src/db/seed.ts
 ```
 
 6. Configure environment:
@@ -70,7 +70,7 @@ cp .env.example .env
 ```bash
 mise dev
 # or
-bun --watch src/index.ts
+bun --watch backend/src/index.ts
 ```
 
 The API will be available at `http://localhost:3000`
