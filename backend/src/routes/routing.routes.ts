@@ -15,7 +15,6 @@ import type {
   ConfigureRouteResponse,
   DeleteRouteRequest,
   DeleteRouteResponse,
-  JWTPayload,
 } from '../types/index.js';
 
 // Union type for all routing protocol configurations
@@ -69,17 +68,6 @@ const RouteRequestSchema = t.Union([
   EIGRPRouteSchema,
 ]);
 
-// Authentication guard function
-const requireAuth = ({ user, set }: { user: JWTPayload | null; set: { status: number } }) => {
-  if (!user) {
-    set.status = 401;
-    return {
-      error: 'Authentication required',
-      message: 'Please provide a valid bearer token',
-    };
-  }
-};
-
 export const routingRoutes = new Elysia({ prefix: '/api/routes' })
   .use(authPlugin)
 
@@ -89,12 +77,12 @@ export const routingRoutes = new Elysia({ prefix: '/api/routes' })
    */
   .get(
     '/',
-    async ({ user }) => {
+    async (context: any) => {
       const result = await networkService.getRoutes();
 
       // Create audit log
       await db.createAuditLog({
-        userId: (user as JWTPayload | null)?.userId,
+        userId: context.user?.userId,
         action: 'get_routes',
         resourceType: 'route',
         responseStatus: 200,
@@ -103,7 +91,15 @@ export const routingRoutes = new Elysia({ prefix: '/api/routes' })
       return result as GetRoutesResponse;
     },
     {
-      beforeHandle: requireAuth,
+      beforeHandle: (context: any) => {
+        if (!context.user) {
+          context.set.status = 401;
+          return {
+            error: 'Authentication required',
+            message: 'Please provide a valid bearer token',
+          };
+        }
+      },
       detail: {
         description: 'Get the routing table from the router',
         tags: ['Routing'],
@@ -114,6 +110,9 @@ export const routingRoutes = new Elysia({ prefix: '/api/routes' })
           },
           401: {
             description: 'Authentication required',
+          },
+          403: {
+            description: 'Insufficient permissions',
           },
         },
       },
@@ -126,8 +125,8 @@ export const routingRoutes = new Elysia({ prefix: '/api/routes' })
    */
   .get(
     '/:protocol',
-    async ({ params, user }) => {
-      const { protocol } = params;
+    async (context: any) => {
+      const { protocol } = context.params;
       const allRoutes = await networkService.getRoutes();
 
       const filteredRoutes = allRoutes.routes.filter(
@@ -136,7 +135,7 @@ export const routingRoutes = new Elysia({ prefix: '/api/routes' })
 
       // Create audit log
       await db.createAuditLog({
-        userId: (user as JWTPayload | null)?.userId,
+        userId: context.user?.userId,
         action: 'get_routes',
         resourceType: 'route',
         resourceId: protocol,
@@ -149,7 +148,15 @@ export const routingRoutes = new Elysia({ prefix: '/api/routes' })
       };
     },
     {
-      beforeHandle: requireAuth,
+      beforeHandle: (context: any) => {
+        if (!context.user) {
+          context.set.status = 401;
+          return {
+            error: 'Authentication required',
+            message: 'Please provide a valid bearer token',
+          };
+        }
+      },
       params: t.Object({
         protocol: t.Union([
           t.Literal('static'),
@@ -167,6 +174,9 @@ export const routingRoutes = new Elysia({ prefix: '/api/routes' })
           200: {
             description: 'Routes for the specified protocol',
           },
+          400: {
+            description: 'Invalid protocol',
+          },
         },
       },
     }
@@ -178,13 +188,12 @@ export const routingRoutes = new Elysia({ prefix: '/api/routes' })
    */
   .post(
     '/',
-    async ({ body, user, set }) => {
-      const request = body as ConfigureRouteRequest;
-      const userData = user as JWTPayload | null;
+    async (context: any) => {
+      const request = context.body as ConfigureRouteRequest;
 
       // Check if user has write permission
-      if (userData?.role === 'readonly') {
-        set.status = 403;
+      if (context.user?.role === 'readonly') {
+        context.set.status = 403;
         return {
           error: 'Forbidden',
           message: 'Read-only users cannot modify configurations',
@@ -195,27 +204,35 @@ export const routingRoutes = new Elysia({ prefix: '/api/routes' })
 
       // Create audit log
       await db.createAuditLog({
-        userId: userData?.userId,
+        userId: context.user?.userId,
         action: 'configure_route',
         resourceType: 'route',
         resourceId: request.protocol,
-        requestData: request,
+        requestData: request as unknown as Record<string, unknown>,
         responseStatus: 200,
       });
 
       // Create config history
       await db.createConfigHistory({
-        userId: userData?.userId,
+        userId: context.user?.userId,
         resourceType: 'route',
-        resourceId: request.protocol,
-        newConfig: request,
+        resourceName: request.protocol,
+        newConfig: request as unknown as Record<string, unknown>,
         changeType: 'create',
       });
 
       return result as ConfigureRouteResponse;
     },
     {
-      beforeHandle: requireAuth,
+      beforeHandle: (context: any) => {
+        if (!context.user) {
+          context.set.status = 401;
+          return {
+            error: 'Authentication required',
+            message: 'Please provide a valid bearer token',
+          };
+        }
+      },
       body: RouteRequestSchema,
       detail: {
         description: 'Configure routing on the router. Supports static routes, OSPF, BGP, and EIGRP protocols.',
@@ -245,13 +262,12 @@ export const routingRoutes = new Elysia({ prefix: '/api/routes' })
    */
   .delete(
     '/',
-    async ({ body, user, set }) => {
-      const request = body as DeleteRouteRequest;
-      const userData = user as JWTPayload | null;
+    async (context: any) => {
+      const request = context.body as DeleteRouteRequest;
 
       // Check if user has delete permission
-      if (userData?.role !== 'admin') {
-        set.status = 403;
+      if (context.user?.role !== 'admin') {
+        context.set.status = 403;
         return {
           error: 'Forbidden',
           message: 'Only admin users can delete routes',
@@ -262,26 +278,34 @@ export const routingRoutes = new Elysia({ prefix: '/api/routes' })
 
       // Create audit log
       await db.createAuditLog({
-        userId: userData?.userId,
+        userId: context.user?.userId,
         action: 'delete_route',
         resourceType: 'route',
         resourceId: request.destination,
-        requestData: request,
+        requestData: request as unknown as Record<string, unknown>,
         responseStatus: 200,
       });
 
       // Create config history
       await db.createConfigHistory({
-        userId: userData?.userId,
+        userId: context.user?.userId,
         resourceType: 'route',
-        resourceId: request.destination,
+        resourceName: request.destination || request.protocol,
         changeType: 'delete',
       });
 
       return result as DeleteRouteResponse;
     },
     {
-      beforeHandle: requireAuth,
+      beforeHandle: (context: any) => {
+        if (!context.user) {
+          context.set.status = 401;
+          return {
+            error: 'Authentication required',
+            message: 'Please provide a valid bearer token',
+          };
+        }
+      },
       body: t.Object({
         protocol: t.Union([
           t.Literal('static'),

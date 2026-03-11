@@ -24,12 +24,12 @@ export const interfaceRoutes = new Elysia({ prefix: '/api/interfaces' })
    */
   .get(
     '/',
-    async ({ user }) => {
+    async (context: any) => {
       const result = await networkService.getInterfaces();
 
       // Create audit log
       await db.createAuditLog({
-        userId: (user as JWTPayload | null)?.userId,
+        userId: context.user?.userId,
         action: 'get_interfaces',
         resourceType: 'interface',
         responseStatus: 200,
@@ -38,9 +38,9 @@ export const interfaceRoutes = new Elysia({ prefix: '/api/interfaces' })
       return result as GetInterfacesResponse;
     },
     {
-      beforeHandle: ({ user, set }) => {
-        if (!user) {
-          set.status = 401;
+      beforeHandle: (context: any) => {
+        if (!context.user) {
+          context.set.status = 401;
           return {
             error: 'Authentication required',
             message: 'Please provide a valid bearer token',
@@ -72,12 +72,12 @@ export const interfaceRoutes = new Elysia({ prefix: '/api/interfaces' })
    */
   .get(
     '/:name',
-    async ({ params, user, set }) => {
-      const { name } = params;
+    async (context: any) => {
+      const { name } = context.params;
       const iface = await networkService.getInterface(name);
 
       if (!iface) {
-        set.status = 404;
+        context.set.status = 404;
         return {
           error: 'Interface not found',
           message: `Interface ${name} does not exist`,
@@ -86,7 +86,7 @@ export const interfaceRoutes = new Elysia({ prefix: '/api/interfaces' })
 
       // Create audit log
       await db.createAuditLog({
-        userId: (user as JWTPayload | null)?.userId,
+        userId: context.user?.userId,
         action: 'get_interface',
         resourceType: 'interface',
         resourceId: name,
@@ -96,9 +96,9 @@ export const interfaceRoutes = new Elysia({ prefix: '/api/interfaces' })
       return { interface: iface };
     },
     {
-      beforeHandle: ({ user, set }) => {
-        if (!user) {
-          set.status = 401;
+      beforeHandle: (context: any) => {
+        if (!context.user) {
+          context.set.status = 401;
           return {
             error: 'Authentication required',
             message: 'Please provide a valid bearer token',
@@ -130,13 +130,12 @@ export const interfaceRoutes = new Elysia({ prefix: '/api/interfaces' })
    */
   .post(
     '/',
-    async ({ body, user, set }) => {
-      const request = body as ConfigureInterfaceRequest;
-      const userData = user as JWTPayload | null;
+    async (context: any) => {
+      const request = context.body as ConfigureInterfaceRequest;
 
       // Check if user has write permission
-      if (userData?.role === 'readonly') {
-        set.status = 403;
+      if (context.user?.role === 'readonly') {
+        context.set.status = 403;
         return {
           error: 'Forbidden',
           message: 'Read-only users cannot modify configurations',
@@ -147,29 +146,29 @@ export const interfaceRoutes = new Elysia({ prefix: '/api/interfaces' })
 
       // Create audit log
       await db.createAuditLog({
-        userId: userData?.userId,
+        userId: context.user?.userId,
         action: 'configure_interface',
         resourceType: 'interface',
         resourceId: request.name,
-        requestData: request,
+        requestData: request as unknown as Record<string, unknown>,
         responseStatus: 200,
       });
 
       // Create config history
       await db.createConfigHistory({
-        userId: userData?.userId,
+        userId: context.user?.userId,
         resourceType: 'interface',
         resourceName: request.name,
-        newConfig: request,
+        newConfig: request as unknown as Record<string, unknown>,
         changeType: 'update',
       });
 
       return result as ConfigureInterfaceResponse;
     },
     {
-      beforeHandle: ({ user, set }) => {
-        if (!user) {
-          set.status = 401;
+      beforeHandle: (context: any) => {
+        if (!context.user) {
+          context.set.status = 401;
           return {
             error: 'Authentication required',
             message: 'Please provide a valid bearer token',
@@ -177,7 +176,18 @@ export const interfaceRoutes = new Elysia({ prefix: '/api/interfaces' })
         }
       },
       body: t.Object({
-        name: t.String(),
+        name: t.Enum({
+          GigabitEthernet0: 'GigabitEthernet0',
+          'GigabitEthernet0/0/0': 'GigabitEthernet0/0/0',
+          'GigabitEthernet0/0/1': 'GigabitEthernet0/0/1',
+          'Serial0/1/0': 'Serial0/1/0',
+          'Serial0/1/1': 'Serial0/1/1',
+          'GigabitEthernet0/2/0': 'GigabitEthernet0/2/0',
+          'GigabitEthernet0/2/1': 'GigabitEthernet0/2/1',
+          'GigabitEthernet0/2/2': 'GigabitEthernet0/2/2',
+          'GigabitEthernet0/2/3': 'GigabitEthernet0/2/3',
+          Vlan1: 'Vlan1',
+        } as const),
         ip: t.Optional(t.String()),
         description: t.Optional(t.String()),
         enabled: t.Optional(t.Boolean()),

@@ -15,17 +15,6 @@ import type {
   JWTPayload,
 } from '../types/index.js';
 
-// Authentication guard function
-const requireAuth = ({ user, set }: { user: JWTPayload | null; set: { status: number } }) => {
-  if (!user) {
-    set.status = 401;
-    return {
-      error: 'Authentication required',
-      message: 'Please provide a valid bearer token',
-    };
-  }
-};
-
 export const firewallRoutes = new Elysia({ prefix: '/api/firewall' })
   .use(authPlugin)
 
@@ -35,12 +24,12 @@ export const firewallRoutes = new Elysia({ prefix: '/api/firewall' })
    */
   .get(
     '/',
-    async ({ user }) => {
+    async (context: any) => {
       const result = await networkService.getFirewallRules();
 
       // Create audit log
       await db.createAuditLog({
-        userId: (user as JWTPayload | null)?.userId,
+        userId: context.user?.userId,
         action: 'get_firewall_rules',
         resourceType: 'firewall',
         responseStatus: 200,
@@ -49,7 +38,15 @@ export const firewallRoutes = new Elysia({ prefix: '/api/firewall' })
       return result;
     },
     {
-      beforeHandle: requireAuth,
+      beforeHandle: (context: any) => {
+        if (!context.user) {
+          context.set.status = 401;
+          return {
+            error: 'Authentication required',
+            message: 'Please provide a valid bearer token',
+          };
+        }
+      },
       detail: {
         description: 'Get all firewall rules from the router',
         tags: ['Firewall'],
@@ -60,6 +57,9 @@ export const firewallRoutes = new Elysia({ prefix: '/api/firewall' })
           },
           401: {
             description: 'Authentication required',
+          },
+          403: {
+            description: 'Insufficient permissions',
           },
         },
       },
@@ -72,13 +72,12 @@ export const firewallRoutes = new Elysia({ prefix: '/api/firewall' })
    */
   .post(
     '/',
-    async ({ body, user, set }) => {
-      const request = body as FirewallRuleRequest;
-      const userData = user as JWTPayload | null;
+    async (context: any) => {
+      const request = context.body as FirewallRuleRequest;
 
       // Check if user has write permission
-      if (userData?.role === 'readonly') {
-        set.status = 403;
+      if (context.user?.role === 'readonly') {
+        context.set.status = 403;
         return {
           error: 'Forbidden',
           message: 'Read-only users cannot modify configurations',
@@ -89,27 +88,35 @@ export const firewallRoutes = new Elysia({ prefix: '/api/firewall' })
 
       // Create audit log
       await db.createAuditLog({
-        userId: userData?.userId,
+        userId: context.user?.userId,
         action: 'configure_firewall_rule',
         resourceType: 'firewall',
         resourceId: result.ruleId.toString(),
-        requestData: request,
+        requestData: request as unknown as Record<string, unknown>,
         responseStatus: 200,
       });
 
       // Create config history
       await db.createConfigHistory({
-        userId: userData?.userId,
+        userId: context.user?.userId,
         resourceType: 'firewall',
-        resourceId: result.ruleId.toString(),
-        newConfig: request,
+        resourceName: `Rule ${result.ruleId}`,
+        newConfig: request as unknown as Record<string, unknown>,
         changeType: 'create',
       });
 
       return result as FirewallRuleResponse;
     },
     {
-      beforeHandle: requireAuth,
+      beforeHandle: (context: any) => {
+        if (!context.user) {
+          context.set.status = 401;
+          return {
+            error: 'Authentication required',
+            message: 'Please provide a valid bearer token',
+          };
+        }
+      },
       body: t.Object({
         action: t.Union([t.Literal('permit'), t.Literal('deny')]),
         source: t.String(),
@@ -152,13 +159,12 @@ export const firewallRoutes = new Elysia({ prefix: '/api/firewall' })
    */
   .delete(
     '/:ruleId',
-    async ({ params, user, set }) => {
-      const { ruleId } = params;
-      const userData = user as JWTPayload | null;
+    async (context: any) => {
+      const { ruleId } = context.params;
 
       // Check if user has delete permission
-      if (userData?.role !== 'admin') {
-        set.status = 403;
+      if (context.user?.role !== 'admin') {
+        context.set.status = 403;
         return {
           error: 'Forbidden',
           message: 'Only admin users can delete firewall rules',
@@ -169,7 +175,7 @@ export const firewallRoutes = new Elysia({ prefix: '/api/firewall' })
 
       // Create audit log
       await db.createAuditLog({
-        userId: userData?.userId,
+        userId: context.user?.userId,
         action: 'delete_firewall_rule',
         resourceType: 'firewall',
         resourceId: ruleId,
@@ -178,16 +184,24 @@ export const firewallRoutes = new Elysia({ prefix: '/api/firewall' })
 
       // Create config history
       await db.createConfigHistory({
-        userId: userData?.userId,
+        userId: context.user?.userId,
         resourceType: 'firewall',
-        resourceId: ruleId,
+        resourceName: `Rule ${ruleId}`,
         changeType: 'delete',
       });
 
       return result;
     },
     {
-      beforeHandle: requireAuth,
+      beforeHandle: (context: any) => {
+        if (!context.user) {
+          context.set.status = 401;
+          return {
+            error: 'Authentication required',
+            message: 'Please provide a valid bearer token',
+          };
+        }
+      },
       params: t.Object({
         ruleId: t.String(),
       }),

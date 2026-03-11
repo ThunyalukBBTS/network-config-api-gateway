@@ -2,32 +2,34 @@
  * Authentication routes
  * POST /api/auth/login - Login and get JWT token
  * POST /api/auth/logout - Logout and invalidate token
+ * GET /api/auth/me - Get current user info
  */
 
 import { Elysia, t } from 'elysia';
 import { authPlugin, extractToken } from '../middleware/auth.js';
 import { db } from '../db/index.js';
-import { hashPassword, comparePassword, sha256 } from '../utils/crypto.js';
+import { comparePassword, sha256 } from '../utils/crypto.js';
 import { config } from '../config/index.js';
 import type { LoginRequest, LoginResponse, LogoutResponse, JWTPayload } from '../types/index.js';
 
 export const authRoutes = new Elysia({ prefix: '/api/auth' })
   .use(authPlugin)
+
   /**
    * POST /api/auth/login
    * Authenticate user and return JWT token
    */
   .post(
     '/login',
-    async ({ body, jwt, set }) => {
-      const { username, password } = body as LoginRequest;
+    async (context: any) => {
+      const { username, password } = context.body as LoginRequest;
 
       // Find user
       const users = await db.findUserByUsername(username);
       const user = users[0];
 
       if (!user) {
-        set.status = 401;
+        context.set.status = 401;
         return {
           error: 'Authentication failed',
           message: 'Invalid username or password',
@@ -38,7 +40,7 @@ export const authRoutes = new Elysia({ prefix: '/api/auth' })
       const isValidPassword = await comparePassword(password, user.password_hash || '');
 
       if (!isValidPassword) {
-        set.status = 401;
+        context.set.status = 401;
         return {
           error: 'Authentication failed',
           message: 'Invalid username or password',
@@ -49,10 +51,10 @@ export const authRoutes = new Elysia({ prefix: '/api/auth' })
       const payload: JWTPayload = {
         userId: user.id,
         username: user.username,
-        role: user.role as 'admin' | 'operator' | 'readonly',
+        role: user.role as 'admin',
       };
 
-      const token = await jwt.sign(payload);
+      const token = await context.jwt.sign(payload);
 
       // Calculate expiration time
       const expiresAt = new Date();
@@ -82,7 +84,7 @@ export const authRoutes = new Elysia({ prefix: '/api/auth' })
         user: {
           id: user.id,
           username: user.username,
-          role: user.role as 'admin' | 'operator' | 'readonly',
+          role: user.role as 'admin',
         },
       };
 
@@ -99,7 +101,6 @@ export const authRoutes = new Elysia({ prefix: '/api/auth' })
         responses: {
           200: {
             description: 'Login successful',
-            content: 'application/json',
           },
           401: {
             description: 'Authentication failed',
@@ -115,9 +116,11 @@ export const authRoutes = new Elysia({ prefix: '/api/auth' })
    */
   .post(
     '/logout',
-    async ({ request, set, user }) => {
+    async (context: any) => {
+      const user = context.user as JWTPayload | null;
+
       if (!user) {
-        set.status = 401;
+        context.set.status = 401;
         return {
           error: 'Authentication required',
           message: 'Please provide a valid bearer token',
@@ -125,7 +128,7 @@ export const authRoutes = new Elysia({ prefix: '/api/auth' })
       }
 
       // Extract and invalidate token
-      const token = extractToken(request);
+      const token = extractToken(context.request);
       if (token) {
         const tokenHash = sha256(token);
         await db.revokeSession(tokenHash);
@@ -167,9 +170,11 @@ export const authRoutes = new Elysia({ prefix: '/api/auth' })
    */
   .get(
     '/me',
-    async ({ user, set }) => {
+    async (context: any) => {
+      const user = context.user as JWTPayload | null;
+
       if (!user) {
-        set.status = 401;
+        context.set.status = 401;
         return {
           error: 'Authentication required',
           message: 'Please provide a valid bearer token',
