@@ -11,7 +11,7 @@ import { cors } from '@elysiajs/cors';
 import { swagger } from '@elysiajs/swagger';
 import { config } from './config/index.js';
 import { getDb, closeDb } from './db/index.js';
-import { authRoutes, interfaceRoutes, routingRoutes, firewallRoutes } from './routes/index.js';
+import { authRoutes, healthRoutes, interfaceRoutes, routingRoutes, firewallRoutes } from './routes/index.js';
 
 // Create Elysia app
 const app = new Elysia({
@@ -42,6 +42,7 @@ const app = new Elysia({
           - **Interfaces**: View and configure network interfaces
           - **Routing**: Configure static routes, OSPF, BGP, and EIGRP
           - **Firewall**: Manage firewall rules
+          - **Health**: Check API and router connectivity
 
           ## Supported Routing Protocols
           - Static Routes
@@ -52,6 +53,7 @@ const app = new Elysia({
       },
       tags: [
         { name: 'Authentication', description: 'Authentication endpoints' },
+        { name: 'Health', description: 'Health check endpoints' },
         { name: 'Interfaces', description: 'Network interface management' },
         { name: 'Routing', description: 'Routing configuration' },
         { name: 'Firewall', description: 'Firewall rule management' },
@@ -69,7 +71,7 @@ const app = new Elysia({
     },
   }))
 
-  // Health check endpoint
+  // Health check endpoint (legacy)
   .get('/health', async () => {
     // Check database connection
     let dbStatus = 'disconnected';
@@ -91,7 +93,7 @@ const app = new Elysia({
     };
   }, {
     detail: {
-      description: 'Health check endpoint',
+      description: 'Health check endpoint (legacy)',
       tags: ['System'],
       responses: {
         200: {
@@ -108,6 +110,7 @@ const app = new Elysia({
     description: 'REST API Gateway for Cisco ISR4321 router management',
     documentation: '/docs',
     endpoints: {
+      health: '/api/health',
       auth: '/api/auth',
       interfaces: '/api/interfaces',
       routes: '/api/routes',
@@ -116,6 +119,7 @@ const app = new Elysia({
   }))
 
   // Register routes
+  .use(healthRoutes)
   .use(authRoutes)
   .use(interfaceRoutes)
   .use(routingRoutes)
@@ -172,6 +176,7 @@ console.log(`
 ║  Server running on: http://${config.host}:${config.port}          ║
 ║  API Documentation: http://${config.host}:${config.port}/docs    ║
 ║  Health Check: http://${config.host}:${config.port}/health       ║
+║  Router Health: http://${config.host}:${config.port}/api/health/router  ║
 ║                                                           ║
 ║  Mode: ${config.mockMode ? 'MOCK (development)' : 'Production'}              ║
 ║                                                           ║
