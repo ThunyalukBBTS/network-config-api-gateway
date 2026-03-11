@@ -198,7 +198,3 @@ src/
 
 YANG models for Cisco IOS XE 16.9.3 are available at:
 https://github.com/YangModels/yang/tree/main/vendor/cisco/xe/1693
-
-## License
-
-MIT

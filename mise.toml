@@ -3,31 +3,31 @@ DATABASE_URL = "postgresql://postgres:postgres@localhost:5432/network_gateway"
 
 [tasks.db-up]
 description = "Start PostgreSQL database with Docker Compose"
-run = "docker compose -f ../docker/docker-compose.yml up -d"
+run = "docker compose -f docker/docker-compose.yml up -d"
 
 [tasks.db-down]
 description = "Stop PostgreSQL database"
-run = "docker compose -f ../docker/docker-compose.yml down"
+run = "docker compose -f docker/docker-compose.yml down"
 
 [tasks.db-logs]
 description = "View PostgreSQL logs"
-run = "docker compose -f ../docker/docker-compose.yml logs -f"
+run = "docker compose -f docker/docker-compose.yml logs -f"
 
 [tasks.db-reset]
 description = "Reset database (down, remove volumes, up)"
-run = "docker compose -f ../docker/docker-compose.yml down -v && docker compose -f ../docker/docker-compose.yml up -d"
+run = "docker compose -f docker/docker-compose.yml down -v && docker compose -f docker/docker-compose.yml up -d"
 
 [tasks.migrate]
 description = "Run database migrations"
-run = "bun src/db/migrate.ts"
+run = "cd backend && bun src/db/migrate.ts"
 
 [tasks.seed]
 description = "Seed database with initial data"
-run = "bun src/db/seed.ts"
+run = "cd backend && bun src/db/seed.ts"
 
 [tasks.dev]
 description = "Start development server with hot reload"
-run = "bun --hot src/index.ts"
+run = "cd backend && bun --hot src/index.ts"
 
 [tasks.console]
 description = "Connect to Cisco console via serial port"
@@ -35,24 +35,24 @@ run = "screen /dev/ttyACM0 9600"
 
 [tasks.build]
 description = "Build the project"
-run = "bun build src/index.ts --outdir ./dist --target bun"
+run = "cd backend && bun build src/index.ts --outdir ./dist --target bun"
 
 [tasks.start]
 description = "Start production server"
-run = "bun dist/index.js"
+run = "cd backend && bun dist/index.js"
 
 [tasks.test]
 description = "Run tests"
-run = "bun test"
+run = "cd backend && bun test"
 
 [tasks.lint]
 description = "Lint code"
-run = "biome check src/"
+run = "cd backend && biome check src/"
 
 [tasks.format]
 description = "Format code"
-run = "biome format --write src/"
+run = "cd backend && biome format --write src/"
 
 [tasks.clean]
 description = "Clean build artifacts"
-run = "rm -rf dist/"
+run = "cd backend && rm -rf dist/"
