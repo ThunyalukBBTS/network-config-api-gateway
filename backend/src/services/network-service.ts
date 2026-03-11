@@ -1,11 +1,10 @@
 /**
  * Network Service
  * Main service layer for network operations
- * Uses mock data or real gNMI/NETCONF clients based on configuration
+ * Uses mock data or real NETCONF client based on configuration
  */
 
 import { config } from '../config/index.js';
-import { GNMIClient } from './gnmi-client.js';
 import { NETCONFClient } from './netconf-client.js';
 import * as mockData from './mock-data.js';
 import type {
@@ -23,19 +22,10 @@ import type {
 } from '../types/index.js';
 
 export class NetworkService {
-  private gnmiClient: GNMIClient;
   private netconfClient: NETCONFClient;
   private useMock: boolean;
 
   constructor() {
-    this.gnmiClient = new GNMIClient({
-      host: config.gnmiHost,
-      port: config.gnmiPort,
-      username: config.gnmiUsername,
-      password: config.gnmiPassword,
-      insecure: config.gnmiInsecure,
-    });
-
     this.netconfClient = new NETCONFClient({
       host: config.netconfHost,
       port: config.netconfPort,
@@ -54,10 +44,116 @@ export class NetworkService {
       return { interfaces: mockData.mockInterfaces };
     }
 
-    // Use gNMI to get interface configurations
-    const response = await this.gnmiClient.getRouting();
-    // TODO: Parse response into InterfaceConfig[]
-    return { interfaces: mockData.mockInterfaces };
+    // Use NETCONF to get interface configurations
+    const response = await this.netconfClient.getAllInterfaces();
+
+    if (!response.success || !response.data) {
+      console.error('[NetworkService] Failed to get interfaces:', response.error);
+      return { interfaces: [] };
+    }
+
+    // Parse NETCONF response to InterfaceConfig[]
+    const interfaces = this.parseInterfaceData(response.data);
+    return { interfaces };
+  }
+
+  /**
+   * Parse NETCONF interface data to InterfaceConfig[]
+   */
+  private parseInterfaceData(data: any): InterfaceConfig[] {
+    const interfaces: InterfaceConfig[] = [];
+
+    try {
+      // Navigate through the NETCONF response structure
+      const interfacesData = data?.data?.['interfaces-oper:interfaces']?.['interface'];
+
+      if (!interfacesData) {
+        console.warn('[NetworkService] No interface data in NETCONF response');
+        return interfaces;
+      }
+
+      // Handle single interface (object) or multiple interfaces (array)
+      const interfaceList = Array.isArray(interfacesData) ? interfacesData : [interfacesData];
+
+      for (const iface of interfaceList) {
+        const name = iface['name'] || '';
+        const ip = this.extractInterfaceIP(iface);
+        const status = this.determineInterfaceStatus(iface);
+        const description = iface['description'] || '';
+
+        interfaces.push({
+          name,
+          ip,
+          status,
+          description,
+          enabled: status === 'up',
+          mtu: iface['mtu'] || 1500,
+        });
+      }
+    } catch (error) {
+      console.error('[NetworkService] Error parsing interface data:', error);
+    }
+
+    return interfaces;
+  }
+
+  /**
+   * Extract IP address from interface data
+   */
+  private extractInterfaceIP(iface: any): string {
+    try {
+      const ipv4 = iface['ipv4'];
+      if (ipv4) {
+        const primary = ipv4['primary'] || ipv4['ip'];
+        if (Array.isArray(primary) && primary.length > 0) {
+          const addr = primary[0]['address'] || primary[0]['ip'];
+          const mask = primary[0]['netmask'] || primary[0]['mask'];
+          if (addr && mask) {
+            return `${addr}/${this.maskToCIDR(mask)}`;
+          }
+          return addr || 'unassigned';
+        }
+        if (primary?.['address']) {
+          return primary['address'];
+        }
+      }
+    } catch (error) {
+      // Ignore parsing errors
+    }
+    return 'unassigned';
+  }
+
+  /**
+   * Determine interface status from NETCONF data
+   */
+  private determineInterfaceStatus(iface: any): string {
+    const adminStatus = iface['admin-status'] || iface['oper-status'];
+    const operStatus = iface['oper-status'];
+
+    if (adminStatus === 'down') return 'admin-down';
+    if (operStatus === 'down') return 'down';
+    if (operStatus === 'up') return 'up';
+    return 'unknown';
+  }
+
+  /**
+   * Convert subnet mask to CIDR notation
+   */
+  private maskToCIDR(mask: string): number {
+    const parts = mask.split('.');
+    let cidr = 0;
+    for (const part of parts) {
+      const num = parseInt(part, 10);
+      if (num === 255) cidr += 8;
+      else if (num === 254) cidr += 7;
+      else if (num === 252) cidr += 6;
+      else if (num === 248) cidr += 5;
+      else if (num === 240) cidr += 4;
+      else if (num === 224) cidr += 3;
+      else if (num === 192) cidr += 2;
+      else if (num === 128) cidr += 1;
+    }
+    return cidr;
   }
 
   /**
@@ -68,9 +164,15 @@ export class NetworkService {
       return mockData.getMockInterface(name) || null;
     }
 
-    const response = await this.gnmiClient.getInterface(name);
-    // TODO: Parse response into InterfaceConfig
-    return mockData.getMockInterface(name) || null;
+    const response = await this.netconfClient.getInterface(name);
+
+    if (!response.success || !response.data) {
+      console.error('[NetworkService] Failed to get interface:', response.error);
+      return null;
+    }
+
+    const interfaces = this.parseInterfaceData(response.data);
+    return interfaces[0] || null;
   }
 
   /**
@@ -98,7 +200,7 @@ export class NetworkService {
     }
 
     // Use NETCONF to configure the interface
-    const response = await this.netconfClient.configureInterface(request.name, request);
+    const response = await this.netconfClient.configureInterface(request.name, request as unknown as Record<string, unknown>);
     if (!response.success) {
       throw new Error(response.error || 'Failed to configure interface');
     }
@@ -117,10 +219,57 @@ export class NetworkService {
       return { routes: mockData.mockRoutes };
     }
 
-    // Use gNMI/NETCONF to get routing table
+    // Use NETCONF to get routing table
     const response = await this.netconfClient.getRoutingTable();
-    // TODO: Parse response into Route[]
-    return { routes: mockData.mockRoutes };
+
+    if (!response.success || !response.data) {
+      console.error('[NetworkService] Failed to get routes:', response.error);
+      return { routes: [] };
+    }
+
+    // Parse NETCONF response to Route[]
+    const routes = this.parseRouteData(response.data);
+    return { routes };
+  }
+
+  /**
+   * Parse NETCONF route data to Route[]
+   */
+  private parseRouteData(data: any): Route[] {
+    const routes: Route[] = [];
+
+    try {
+      const routeData = data?.data?.['ip-routing-oper:route-vrf'];
+
+      if (!routeData) {
+        console.warn('[NetworkService] No route data in NETCONF response');
+        return routes;
+      }
+
+      // Handle route entries
+      const routeList = routeData['route-table'] || [];
+      const routesArray = Array.isArray(routeList) ? routeList : [routeList];
+
+      for (const table of routesArray) {
+        const routes = table['route'] || [];
+        const routeEntries = Array.isArray(routes) ? routes : [routes];
+
+        for (const route of routeEntries) {
+          routes.push({
+            destination: route['destination'] || '0.0.0.0/0',
+            nextHop: route['next-hop'] || '',
+            interface: route['outgoing-interface'] || '',
+            protocol: route['route-protocol'] || 'unknown',
+            metric: route['metric'] || 0,
+            adminDistance: route['admin-distance'] || 0,
+          });
+        }
+      }
+    } catch (error) {
+      console.error('[NetworkService] Error parsing route data:', error);
+    }
+
+    return routes;
   }
 
   /**
@@ -176,7 +325,7 @@ export class NetworkService {
       }
       case 'ospf': {
         const req = request as typeof request & { protocol: 'ospf' };
-        const response = await this.netconfClient.configureOSPF(req);
+        const response = await this.netconfClient.configureOSPF(req as unknown as Record<string, unknown>);
         if (!response.success) {
           throw new Error(response.error || 'Failed to configure OSPF');
         }
@@ -184,7 +333,7 @@ export class NetworkService {
       }
       case 'bgp': {
         const req = request as typeof request & { protocol: 'bgp' };
-        const response = await this.netconfClient.configureBGP(req);
+        const response = await this.netconfClient.configureBGP(req as unknown as Record<string, unknown>);
         if (!response.success) {
           throw new Error(response.error || 'Failed to configure BGP');
         }
@@ -192,7 +341,7 @@ export class NetworkService {
       }
       case 'eigrp': {
         const req = request as typeof request & { protocol: 'eigrp' };
-        const response = await this.netconfClient.configureEIGRP(req);
+        const response = await this.netconfClient.configureEIGRP(req as unknown as Record<string, unknown>);
         if (!response.success) {
           throw new Error(response.error || 'Failed to configure EIGRP');
         }
@@ -237,7 +386,37 @@ export class NetworkService {
     }
 
     // Use NETCONF to get firewall rules
-    return { rules: mockData.mockFirewallRules };
+    const response = await this.netconfClient.getRunningConfig('<acl/>');
+
+    if (!response.success) {
+      console.error('[NetworkService] Failed to get firewall rules:', response.error);
+      return { rules: [] };
+    }
+
+    // Parse NETCONF response to FirewallRule[]
+    const rules = this.parseFirewallData(response.data);
+    return { rules };
+  }
+
+  /**
+   * Parse NETCONF firewall data to FirewallRule[]
+   */
+  private parseFirewallData(data: any): FirewallRule[] {
+    const rules: FirewallRule[] = [];
+
+    try {
+      // NETCONF ACL structure varies by device
+      // This is a placeholder for parsing firewall rules
+      const aclData = data?.data;
+      if (aclData) {
+        // Parse ACL entries from response
+        // This would need to be customized based on actual NETCONF response
+      }
+    } catch (error) {
+      console.error('[NetworkService] Error parsing firewall data:', error);
+    }
+
+    return rules;
   }
 
   /**
@@ -260,7 +439,7 @@ export class NetworkService {
     }
 
     // Use NETCONF to configure firewall rule
-    const response = await this.netconfClient.configureFirewallRule(request);
+    const response = await this.netconfClient.configureFirewallRule(request as unknown as Record<string, unknown>);
     if (!response.success) {
       throw new Error(response.error || 'Failed to configure firewall rule');
     }

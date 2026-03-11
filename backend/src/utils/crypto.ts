@@ -2,7 +2,7 @@
  * Cryptographic utilities
  */
 
-import bcrypt from 'bcrypt';
+import * as bcrypt from 'bcryptjs';
 import { createHash } from 'crypto';
 
 /**

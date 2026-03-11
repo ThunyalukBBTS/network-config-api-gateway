@@ -59,7 +59,7 @@ export interface InterfaceConfig {
   mtu?: number;
 }
 
-export type InterfaceStatus = 'up' | 'down' | 'admin-down';
+export type InterfaceStatus = 'up' | 'down' | 'admin-down' | 'unknown';
 
 export interface GetInterfacesResponse {
   interfaces: InterfaceConfig[];
