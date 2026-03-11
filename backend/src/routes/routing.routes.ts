@@ -6,7 +6,9 @@
  */
 
 import { Elysia, t } from 'elysia';
-import { authPlugin } from '../middleware/auth.js';
+import { jwtVerify } from 'jose';
+import { config } from '../config/index.js';
+import { sha256 } from '../utils/crypto.js';
 import { networkService } from '../services/network-service.js';
 import { db } from '../db/index.js';
 import type {
@@ -68,8 +70,31 @@ const RouteRequestSchema = t.Union([
   EIGRPRouteSchema,
 ]);
 
+// Helper function to verify JWT and get user
+async function verifyTokenAndGetUser(token: string) {
+  try {
+    const { payload } = await jwtVerify(
+      token,
+      Buffer.from(config.jwtSecret)
+    );
+    return {
+      userId: payload.userId as string,
+      username: payload.username as string,
+      role: payload.role as 'admin',
+    };
+  } catch {
+    return null;
+  }
+}
+
+// Check if session is valid
+async function isSessionValid(token: string): Promise<boolean> {
+  const tokenHash = sha256(token);
+  const session = await db.findSession(tokenHash);
+  return session && session.length > 0;
+}
+
 export const routingRoutes = new Elysia({ prefix: '/api/routes' })
-  .use(authPlugin)
 
   /**
    * GET /api/routes
@@ -78,11 +103,32 @@ export const routingRoutes = new Elysia({ prefix: '/api/routes' })
   .get(
     '/',
     async (context: any) => {
+      const authHeader = context.request.headers.get('Authorization');
+
+      if (!authHeader?.startsWith('Bearer ')) {
+        context.set.status = 401;
+        return {
+          error: 'Authentication required',
+          message: 'Please provide a valid bearer token',
+        };
+      }
+
+      const token = authHeader.substring(7);
+      const user = await verifyTokenAndGetUser(token);
+
+      if (!user || !(await isSessionValid(token))) {
+        context.set.status = 401;
+        return {
+          error: 'Authentication required',
+          message: 'Invalid or expired token',
+        };
+      }
+
       const result = await networkService.getRoutes();
 
       // Create audit log
       await db.createAuditLog({
-        userId: context.user?.userId,
+        userId: user.userId,
         action: 'get_routes',
         resourceType: 'route',
         responseStatus: 200,
@@ -91,15 +137,6 @@ export const routingRoutes = new Elysia({ prefix: '/api/routes' })
       return result as GetRoutesResponse;
     },
     {
-      beforeHandle: (context: any) => {
-        if (!context.user) {
-          context.set.status = 401;
-          return {
-            error: 'Authentication required',
-            message: 'Please provide a valid bearer token',
-          };
-        }
-      },
       detail: {
         description: 'Get the routing table from the router',
         tags: ['Routing'],
@@ -126,6 +163,27 @@ export const routingRoutes = new Elysia({ prefix: '/api/routes' })
   .get(
     '/:protocol',
     async (context: any) => {
+      const authHeader = context.request.headers.get('Authorization');
+
+      if (!authHeader?.startsWith('Bearer ')) {
+        context.set.status = 401;
+        return {
+          error: 'Authentication required',
+          message: 'Please provide a valid bearer token',
+        };
+      }
+
+      const token = authHeader.substring(7);
+      const user = await verifyTokenAndGetUser(token);
+
+      if (!user || !(await isSessionValid(token))) {
+        context.set.status = 401;
+        return {
+          error: 'Authentication required',
+          message: 'Invalid or expired token',
+        };
+      }
+
       const { protocol } = context.params;
       const allRoutes = await networkService.getRoutes();
 
@@ -135,7 +193,7 @@ export const routingRoutes = new Elysia({ prefix: '/api/routes' })
 
       // Create audit log
       await db.createAuditLog({
-        userId: context.user?.userId,
+        userId: user.userId,
         action: 'get_routes',
         resourceType: 'route',
         resourceId: protocol,
@@ -148,15 +206,6 @@ export const routingRoutes = new Elysia({ prefix: '/api/routes' })
       };
     },
     {
-      beforeHandle: (context: any) => {
-        if (!context.user) {
-          context.set.status = 401;
-          return {
-            error: 'Authentication required',
-            message: 'Please provide a valid bearer token',
-          };
-        }
-      },
       params: t.Object({
         protocol: t.Union([
           t.Literal('static'),
@@ -189,10 +238,31 @@ export const routingRoutes = new Elysia({ prefix: '/api/routes' })
   .post(
     '/',
     async (context: any) => {
+      const authHeader = context.request.headers.get('Authorization');
+
+      if (!authHeader?.startsWith('Bearer ')) {
+        context.set.status = 401;
+        return {
+          error: 'Authentication required',
+          message: 'Please provide a valid bearer token',
+        };
+      }
+
+      const token = authHeader.substring(7);
+      const user = await verifyTokenAndGetUser(token);
+
+      if (!user || !(await isSessionValid(token))) {
+        context.set.status = 401;
+        return {
+          error: 'Authentication required',
+          message: 'Invalid or expired token',
+        };
+      }
+
       const request = context.body as ConfigureRouteRequest;
 
       // Check if user has write permission
-      if (context.user?.role === 'readonly') {
+      if (user?.role === 'readonly') {
         context.set.status = 403;
         return {
           error: 'Forbidden',
@@ -204,7 +274,7 @@ export const routingRoutes = new Elysia({ prefix: '/api/routes' })
 
       // Create audit log
       await db.createAuditLog({
-        userId: context.user?.userId,
+        userId: user.userId,
         action: 'configure_route',
         resourceType: 'route',
         resourceId: request.protocol,
@@ -214,7 +284,7 @@ export const routingRoutes = new Elysia({ prefix: '/api/routes' })
 
       // Create config history
       await db.createConfigHistory({
-        userId: context.user?.userId,
+        userId: user.userId,
         resourceType: 'route',
         resourceName: request.protocol,
         newConfig: request as unknown as Record<string, unknown>,
@@ -224,15 +294,6 @@ export const routingRoutes = new Elysia({ prefix: '/api/routes' })
       return result as ConfigureRouteResponse;
     },
     {
-      beforeHandle: (context: any) => {
-        if (!context.user) {
-          context.set.status = 401;
-          return {
-            error: 'Authentication required',
-            message: 'Please provide a valid bearer token',
-          };
-        }
-      },
       body: RouteRequestSchema,
       detail: {
         description: 'Configure routing on the router. Supports static routes, OSPF, BGP, and EIGRP protocols.',
@@ -263,10 +324,31 @@ export const routingRoutes = new Elysia({ prefix: '/api/routes' })
   .delete(
     '/',
     async (context: any) => {
+      const authHeader = context.request.headers.get('Authorization');
+
+      if (!authHeader?.startsWith('Bearer ')) {
+        context.set.status = 401;
+        return {
+          error: 'Authentication required',
+          message: 'Please provide a valid bearer token',
+        };
+      }
+
+      const token = authHeader.substring(7);
+      const user = await verifyTokenAndGetUser(token);
+
+      if (!user || !(await isSessionValid(token))) {
+        context.set.status = 401;
+        return {
+          error: 'Authentication required',
+          message: 'Invalid or expired token',
+        };
+      }
+
       const request = context.body as DeleteRouteRequest;
 
       // Check if user has delete permission
-      if (context.user?.role !== 'admin') {
+      if (user?.role !== 'admin') {
         context.set.status = 403;
         return {
           error: 'Forbidden',
@@ -278,7 +360,7 @@ export const routingRoutes = new Elysia({ prefix: '/api/routes' })
 
       // Create audit log
       await db.createAuditLog({
-        userId: context.user?.userId,
+        userId: user.userId,
         action: 'delete_route',
         resourceType: 'route',
         resourceId: request.destination,
@@ -288,7 +370,7 @@ export const routingRoutes = new Elysia({ prefix: '/api/routes' })
 
       // Create config history
       await db.createConfigHistory({
-        userId: context.user?.userId,
+        userId: user.userId,
         resourceType: 'route',
         resourceName: request.destination || request.protocol,
         changeType: 'delete',
@@ -297,15 +379,6 @@ export const routingRoutes = new Elysia({ prefix: '/api/routes' })
       return result as DeleteRouteResponse;
     },
     {
-      beforeHandle: (context: any) => {
-        if (!context.user) {
-          context.set.status = 401;
-          return {
-            error: 'Authentication required',
-            message: 'Please provide a valid bearer token',
-          };
-        }
-      },
       body: t.Object({
         protocol: t.Union([
           t.Literal('static'),

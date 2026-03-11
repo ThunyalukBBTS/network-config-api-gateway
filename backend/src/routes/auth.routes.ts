@@ -1,23 +1,22 @@
 /**
  * Authentication routes
  * POST /api/auth/login - Login and get JWT token
- * POST /api/auth/logout - Logout and invalidate token
+ * POST /api/auth/logout - Invalidate JWT token
  * GET /api/auth/me - Get current user info
  */
 
 import { Elysia, t } from 'elysia';
-import { authPlugin, extractToken } from '../middleware/auth.js';
+import { SignJWT, jwtVerify } from 'jose';
 import { db } from '../db/index.js';
 import { comparePassword, sha256 } from '../utils/crypto.js';
 import { config } from '../config/index.js';
 import type { LoginRequest, LoginResponse, LogoutResponse, JWTPayload } from '../types/index.js';
 
 export const authRoutes = new Elysia({ prefix: '/api/auth' })
-  .use(authPlugin)
 
   /**
    * POST /api/auth/login
-   * Authenticate user and return JWT token
+   * Login and get JWT token
    */
   .post(
     '/login',
@@ -48,13 +47,15 @@ export const authRoutes = new Elysia({ prefix: '/api/auth' })
       }
 
       // Create JWT token
-      const payload: JWTPayload = {
+      const token = await new SignJWT({
         userId: user.id,
         username: user.username,
-        role: user.role as 'admin',
-      };
-
-      const token = await context.jwt.sign(payload);
+        role: user.role,
+      })
+        .setProtectedHeader({ alg: 'HS256', typ: 'JWT' })
+        .setIssuedAt()
+        .setExpirationTime('1h')
+        .sign(Buffer.from(config.jwtSecret));
 
       // Calculate expiration time
       const expiresAt = new Date();
@@ -117,9 +118,9 @@ export const authRoutes = new Elysia({ prefix: '/api/auth' })
   .post(
     '/logout',
     async (context: any) => {
-      const user = context.user as JWTPayload | null;
+      const authHeader = context.request.headers.get('Authorization');
 
-      if (!user) {
+      if (!authHeader?.startsWith('Bearer ')) {
         context.set.status = 401;
         return {
           error: 'Authentication required',
@@ -127,16 +128,47 @@ export const authRoutes = new Elysia({ prefix: '/api/auth' })
         };
       }
 
-      // Extract and invalidate token
-      const token = extractToken(context.request);
-      if (token) {
-        const tokenHash = sha256(token);
-        await db.revokeSession(tokenHash);
+      const token = authHeader.substring(7);
+
+      // Verify JWT
+      let payload: JWTPayload | null = null;
+      try {
+        const { payload: verifiedPayload } = await jwtVerify(
+          token,
+          Buffer.from(config.jwtSecret)
+        );
+        payload = {
+          userId: verifiedPayload.userId as string,
+          username: verifiedPayload.username as string,
+          role: verifiedPayload.role as 'admin',
+        };
+      } catch (err) {
+        console.log('[LOGOUT] JWT verify error:', err);
+        context.set.status = 401;
+        return {
+          error: 'Authentication required',
+          message: 'Invalid token signature or expired token',
+        };
       }
+
+      // Check session
+      const tokenHash = sha256(token);
+      const session = await db.findSession(tokenHash);
+
+      if (!session || session.length === 0) {
+        context.set.status = 401;
+        return {
+          error: 'Authentication required',
+          message: 'Session not found or expired',
+        };
+      }
+
+      // Invalidate token
+      await db.revokeSession(tokenHash);
 
       // Create audit log
       await db.createAuditLog({
-        userId: user.userId,
+        userId: payload.userId,
         action: 'logout',
         responseStatus: 200,
       });
@@ -171,9 +203,9 @@ export const authRoutes = new Elysia({ prefix: '/api/auth' })
   .get(
     '/me',
     async (context: any) => {
-      const user = context.user as JWTPayload | null;
+      const authHeader = context.request.headers.get('Authorization');
 
-      if (!user) {
+      if (!authHeader?.startsWith('Bearer ')) {
         context.set.status = 401;
         return {
           error: 'Authentication required',
@@ -181,11 +213,53 @@ export const authRoutes = new Elysia({ prefix: '/api/auth' })
         };
       }
 
+      const token = authHeader.substring(7);
+
+      // Verify JWT
+      let payload: JWTPayload | null = null;
+      try {
+        const { payload: verifiedPayload } = await jwtVerify(
+          token,
+          Buffer.from(config.jwtSecret)
+        );
+        payload = {
+          userId: verifiedPayload.userId as string,
+          username: verifiedPayload.username as string,
+          role: verifiedPayload.role as 'admin',
+        };
+      } catch {
+        context.set.status = 401;
+        return {
+          error: 'Authentication required',
+          message: 'Invalid token',
+        };
+      }
+
+      if (!payload) {
+        context.set.status = 401;
+        return {
+          error: 'Authentication required',
+          message: 'Invalid token',
+        };
+      }
+
+      // Check session
+      const tokenHash = sha256(token);
+      const session = await db.findSession(tokenHash);
+
+      if (!session || session.length === 0) {
+        context.set.status = 401;
+        return {
+          error: 'Authentication required',
+          message: 'Session not found or expired',
+        };
+      }
+
       return {
         user: {
-          id: user.userId,
-          username: user.username,
-          role: user.role,
+          id: payload.userId,
+          username: payload.username,
+          role: payload.role,
         },
       };
     },

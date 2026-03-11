@@ -9,6 +9,7 @@
         "@elysiajs/swagger": "^1.1.6",
         "bcrypt": "^5.1.1",
         "elysia": "^1.1.26",
+        "jose": "^6.2.1",
         "postgres": "^3.4.5",
       },
       "devDependencies": {
