@@ -1,0 +1,93 @@
+-- Network API Gateway Database Schema
+-- This file initializes the database schema
+
+-- Create extensions
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+
+-- Users table for authentication
+CREATE TABLE IF NOT EXISTS users (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    username VARCHAR(50) UNIQUE NOT NULL,
+    password_hash VARCHAR(255) NOT NULL,
+    email VARCHAR(100),
+    role VARCHAR(20) NOT NULL DEFAULT 'operator',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    last_login TIMESTAMP,
+    is_active BOOLEAN DEFAULT true
+);
+
+-- Roles: admin, operator, readonly
+CREATE TABLE IF NOT EXISTS roles (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(20) UNIQUE NOT NULL,
+    description TEXT,
+    permissions JSONB DEFAULT '{}'
+);
+
+-- Session management for JWT tokens
+CREATE TABLE IF NOT EXISTS sessions (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+    token_hash VARCHAR(255) UNIQUE NOT NULL,
+    expires_at TIMESTAMP NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    revoked_at TIMESTAMP,
+    is_revoked BOOLEAN DEFAULT false
+);
+
+-- Audit log for tracking API operations
+CREATE TABLE IF NOT EXISTS audit_logs (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+    action VARCHAR(50) NOT NULL,
+    resource_type VARCHAR(50),
+    resource_id VARCHAR(100),
+    request_data JSONB,
+    response_status INTEGER,
+    ip_address VARCHAR(45),
+    user_agent TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Configuration history
+CREATE TABLE IF NOT EXISTS config_history (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+    resource_type VARCHAR(50) NOT NULL,
+    resource_name VARCHAR(100),
+    old_config JSONB,
+    new_config JSONB,
+    change_type VARCHAR(20),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Indexes for better performance
+CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_sessions_token_hash ON sessions(token_hash);
+CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_user_id ON audit_logs(user_id);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON audit_logs(action);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at);
+CREATE INDEX IF NOT EXISTS idx_config_history_resource_type ON config_history(resource_type);
+CREATE INDEX IF NOT EXISTS idx_config_history_created_at ON config_history(created_at);
+
+-- Insert default roles
+INSERT INTO roles (name, description, permissions) VALUES
+    ('admin', 'Full system access', '{"*": true}'),
+    ('operator', 'Can modify configurations', '{"read": true, "write": true, "delete": false}'),
+    ('readonly', 'Read-only access', '{"read": true}')
+ON CONFLICT (name) DO NOTHING;
+
+-- Function to update updated_at timestamp
+CREATE OR REPLACE FUNCTION update_updated_at_column()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = CURRENT_TIMESTAMP;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Trigger to auto-update updated_at
+CREATE TRIGGER update_users_updated_at BEFORE UPDATE ON users
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
