@@ -73,6 +73,17 @@ mise dev
 bun --watch backend/src/index.ts
 ```
 
+## Frr with netconf (beta)
+Ifyou want to using frr:
+```bash
+mise mock-frr
+# or
+cd docker
+docker compose -f docker-compose_frr.yml up -d --build
+python ./testfrr/create_int.py
+python ./testfrr/testNC.py
+```
+
 The API will be available at `http://localhost:3000`
 
 ## API Documentation

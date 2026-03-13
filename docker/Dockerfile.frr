@@ -12,6 +12,7 @@ RUN apt-get update && apt-get install -y \
     vim \
     iptables \
     iputils-ping \
+    wget \
     && rm -rf /var/lib/apt/lists/*
 
 RUN curl -s https://deb.frrouting.org/frr/keys.asc | apt-key add - && \
@@ -19,6 +20,14 @@ RUN curl -s https://deb.frrouting.org/frr/keys.asc | apt-key add - && \
     apt-get update && \
     apt-get install -y frr frr-pythontools && \
     rm -rf /var/lib/apt/lists/*
+
+# -----------------------------------------------------------------
+# install YANG Model for Interface
+# -----------------------------------------------------------------
+RUN wget https://raw.githubusercontent.com/YangModels/yang/main/standard/iana/iana-if-type%402023-01-26.yang -O /tmp/iana-if-type.yang && \
+    sysrepoctl -i /tmp/iana-if-type.yang && \
+    rm /tmp/iana-if-type.yang
+# -----------------------------------------------------------------
 
 RUN echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
 
