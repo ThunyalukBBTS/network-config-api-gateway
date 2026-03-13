@@ -74,7 +74,7 @@ bun --watch backend/src/index.ts
 ```
 
 ## Frr with netconf (beta)
-Ifyou want to using frr:
+If you want to using frr:
 ```bash
 mise mock-frr
 # or
