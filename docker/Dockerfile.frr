@@ -1,0 +1,44 @@
+FROM sysrepo/sysrepo-netopeer2:latest
+
+USER root
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y \
+    curl \
+    gnupg2 \
+    lsb-release \
+    iproute2 \
+    tcpdump \
+    vim \
+    iptables \
+    iputils-ping \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN curl -s https://deb.frrouting.org/frr/keys.asc | apt-key add - && \
+    echo "deb https://deb.frrouting.org/frr $(lsb_release -s -c) frr-stable" > /etc/apt/sources.list.d/frr.list && \
+    apt-get update && \
+    apt-get install -y frr frr-pythontools && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
+
+RUN sed -i 's/zebra=no/zebra=yes/' /etc/frr/daemons && \
+    sed -i 's/bgpd=no/bgpd=yes/' /etc/frr/daemons && \
+    sed -i 's/ospfd=no/ospfd=yes/' /etc/frr/daemons && \
+    sed -i 's/staticd=no/staticd=yes/' /etc/frr/daemons
+
+RUN touch /etc/frr/frr.conf && \
+    chown frr:frr /etc/frr/frr.conf && \
+    chmod 640 /etc/frr/frr.conf
+
+RUN echo "root:frrpassword" | chpasswd
+
+EXPOSE 830
+
+ENTRYPOINT ["/bin/bash", "-c", "\
+  sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1 || true && \
+  /etc/init.d/frr start && \
+  sysrepo-plugind -d & \
+  netopeer2-server -d & \
+  tail -f /dev/null \
+"]

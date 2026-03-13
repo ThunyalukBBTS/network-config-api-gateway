@@ -1,0 +1,13 @@
+services:
+  frr-netconf:
+    build:
+      context: .
+      dockerfile: Dockerfile.frr
+    container_name: frr-netconf-router
+    privileged: true
+    cap_add:
+      - NET_ADMIN
+      - SYS_ADMIN
+    ports:
+      - "830:830"
+    restart: unless-stopped
