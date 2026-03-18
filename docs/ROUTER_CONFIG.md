@@ -184,6 +184,36 @@ ping 8.8.8.8 repeat 5
 ping 1.1.1.1 repeat 5
 ```
 
+## SSH
+```
+hostname ISR4321
+  ip domain-name local.lab
+
+  ! Generate RSA keys
+  crypto key generate rsa
+   2048
+
+  ! Continue with AAA and NETCONF...
+  aaa new-model
+  aaa authentication login default local
+  aaa authorization exec default local
+
+  username admin privilege 15 secret admin123
+
+  ip ssh version 2
+
+  netconf-yang
+```
+
+## SSH Client
+```
+sshpass -p 'admin123' ssh -p 830 -o StrictHostKeyChecking=no -o
+      UserKnownHostsFile=/dev/null -o HostKeyAlgorithms=ssh-rsa -o
+      PubkeyAcceptedKeyTypes=+ssh-rsa -o
+      KexAlgorithms=+diffie-hellman-group1-sha1,diffie-hellman-group14-sha1 admin@192.168.1.1
+      netconf 2>&1 | head -20
+```
+
 ## Backend Environment Configuration
 
 Update `.env` file in backend:

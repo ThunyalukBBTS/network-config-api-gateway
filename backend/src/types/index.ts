@@ -217,6 +217,7 @@ export interface GNMIConfig {
   username: string;
   password: string;
   insecure: boolean;
+  timeout?: number;
 }
 
 export interface NETCONFConfig {
@@ -224,6 +225,45 @@ export interface NETCONFConfig {
   port: number;
   username: string;
   password: string;
+  timeout?: number;
+  autoConnect?: boolean;
+}
+
+// NETCONF Session Types
+export interface NETCONFSessionInfo {
+  sessionId?: string;
+  serverCapabilities: string[];
+  initialized: boolean;
+}
+
+// Enhanced gNMI Types for full implementation
+export interface GNMISetRequest {
+  path: string[];
+  value?: unknown;
+  operation?: 'update' | 'delete' | 'replace';
+}
+
+export interface GNMIGetRequest {
+  path: string[];
+  encoding?: 'json' | 'bytes' | 'proto' | 'ascii';
+  type?: 'all' | 'config' | 'state' | 'operational';
+}
+
+export interface GNMISubscription {
+  path: string;
+  mode?: 'sample' | 'on_change' | 'target_defined';
+  sampleInterval?: number;
+  suppressRedundant?: boolean;
+  heartbeatInterval?: number;
+}
+
+export interface GNMIPath {
+  elem: Array<{
+    name: string;
+    key?: Record<string, string>;
+  }>;
+  origin?: string;
+  target?: string;
 }
 
 // ============================================================================

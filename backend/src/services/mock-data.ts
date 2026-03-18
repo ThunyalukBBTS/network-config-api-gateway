@@ -6,6 +6,30 @@
 import type { InterfaceConfig, Route, FirewallRule } from '../types/index.js';
 
 /**
+ * Mock Cisco NETCONF capabilities
+ * Based on Cisco IOS XE 16.9.3 capabilities for ISR4321
+ */
+export const mockCiscoCapabilities = [
+  'urn:ietf:params:xml:ns:netconf:base:1.0',
+  'urn:ietf:params:xml:ns:netconf:base:1.1',
+  'urn:ietf:params:netconf:capability:writable-running:1.0',
+  'urn:ietf:params:netconf:capability:candidate:1.0',
+  'urn:ietf:params:netconf:capability:confirmed-commit:1.0',
+  'urn:ietf:params:netconf:capability:rollback-on-error:1.0',
+  'urn:ietf:params:netconf:capability:startup:1.0',
+  'urn:ietf:params:netconf:capability:validate:1.0',
+  'urn:ietf:params:netconf:capability:xpath:1.0',
+  'http://cisco.com/ns/yang/Cisco-IOS-XE-native',
+  'http://cisco.com/ns/yang/Cisco-IOS-XE-interfaces-oper',
+  'http://cisco.com/ns/yang/Cisco-IOS-XE-ip',
+  'http://cisco.com/ns/yang/Cisco-IOS-XE-ospf',
+  'http://cisco.com/ns/yang/Cisco-IOS-XE-bgp',
+  'http://cisco.com/ns/yang/Cisco-IOS-XE-eigrp',
+  'http://cisco.com/ns/yang/Cisco-IOS-XE-acl',
+  'http://cisco.com/ns/yang/Cisco-IOS-XE-ip-routing-oper',
+];
+
+/**
  * Mock interface configurations
  * Based on Cisco ISR4321 with IOS XE 16.9.3
  */

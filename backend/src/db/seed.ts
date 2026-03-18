@@ -3,7 +3,7 @@
  * Run this to populate the database with initial data
  */
 
-import bcrypt from 'bcrypt';
+import bcrypt from 'bcryptjs';
 import { getDb } from './index.js';
 
 async function seed() {

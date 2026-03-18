@@ -44,6 +44,10 @@ const app = new Elysia({
           - **Firewall**: Manage firewall rules
           - **Health**: Check API and router connectivity
 
+          ## Supported Protocols
+          - **NETCONF**: Traditional network configuration protocol (RFC 6241)
+          - **gNMI**: Modern gRPC-based network management protocol
+
           ## Supported Routing Protocols
           - Static Routes
           - OSPF (Open Shortest Path First)
@@ -90,6 +94,8 @@ const app = new Elysia({
       version: '1.0.0',
       database: dbStatus,
       mockMode: config.mockMode,
+      preferredProtocol: config.preferredProtocol,
+      gnmiEnabled: config.gnmiEnabled,
     };
   }, {
     detail: {
@@ -115,6 +121,10 @@ const app = new Elysia({
       interfaces: '/api/interfaces',
       routes: '/api/routes',
       firewall: '/api/firewall',
+    },
+    protocols: {
+      preferredProtocol: config.preferredProtocol,
+      gnmiEnabled: config.gnmiEnabled,
     },
   }))
 
@@ -163,10 +173,20 @@ const app = new Elysia({
     await closeDb();
   });
 
+// Format mode display
+function getModeDisplay(): string {
+  if (config.mockMode) return 'MOCK (development)';
+  const proto = config.preferredProtocol.toUpperCase();
+  const gnmiStatus = config.gnmiEnabled ? 'enabled' : 'disabled';
+  return `Production (${proto}, gNMI ${gnmiStatus})`;
+}
+
 // Start server
 app.listen(config.port, () => {
     console.log(`🚀 Elysia server running on port ${config.port}`);
 });
+
+const modeDisplay = getModeDisplay();
 
 console.log(`
 ╔═══════════════════════════════════════════════════════════╗
@@ -178,7 +198,12 @@ console.log(`
 ║  Health Check: http://${config.host}:${config.port}/health       ║
 ║  Router Health: http://${config.host}:${config.port}/api/health/router  ║
 ║                                                           ║
-║  Mode: ${config.mockMode ? 'MOCK (development)' : 'Production'}              ║
+║  Mode: ${modeDisplay.padEnd(50)}║
+║                                                           ║
+║  Configuration:                                          ║
+║  - Preferred Protocol: ${config.preferredProtocol.toUpperCase().padEnd(20)}              ║
+║  - gNMI: ${config.gnmiEnabled ? 'Enabled' : 'Disabled'} (port: ${config.gnmiPort})                 ║
+║  - NETCONF: Enabled (port: ${config.netconfPort})              ║
 ║                                                           ║
 ╚═══════════════════════════════════════════════════════════╝
 `);

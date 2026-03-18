@@ -1,14 +1,17 @@
 /**
  * Network Service
  * Main service layer for network operations
- * Uses mock data or real NETCONF client based on configuration
+ * Uses mock data or real NETCONF/gNMI clients based on configuration
+ * Supports protocol selection (NETCONF or gNMI)
  */
 
 import { config } from '../config/index.js';
 import { NETCONFClient } from './netconf-client.js';
+import { GNMIClient } from './gnmi-client.js';
 import * as mockData from './mock-data.js';
 import type {
   InterfaceConfig,
+  InterfaceStatus,
   ConfigureInterfaceRequest,
   Route,
   ConfigureRouteRequest,
@@ -23,7 +26,10 @@ import type {
 
 export class NetworkService {
   private netconfClient: NETCONFClient;
+  private gnmiClient: GNMIClient;
   private useMock: boolean;
+  private preferredProtocol: 'netconf' | 'gnmi';
+  private gnmiEnabled: boolean;
 
   constructor() {
     this.netconfClient = new NETCONFClient({
@@ -31,9 +37,40 @@ export class NetworkService {
       port: config.netconfPort,
       username: config.netconfUsername,
       password: config.netconfPassword,
+      timeout: config.netconfTimeout,
+      autoConnect: config.netconfAutoConnect,
+    });
+
+    this.gnmiClient = new GNMIClient({
+      host: config.gnmiHost,
+      port: config.gnmiPort,
+      username: config.gnmiUsername,
+      password: config.gnmiPassword,
+      insecure: config.gnmiInsecure,
+      timeout: config.gnmiTimeout,
     });
 
     this.useMock = config.mockMode;
+    this.preferredProtocol = config.preferredProtocol;
+    this.gnmiEnabled = config.gnmiEnabled;
+  }
+
+  /**
+   * Determine which protocol to use
+   */
+  private shouldUseGnmi(): boolean {
+    return this.gnmiEnabled && this.preferredProtocol === 'gnmi';
+  }
+
+  /**
+   * Normalize interface status to valid InterfaceStatus type
+   */
+  private normalizeInterfaceStatus(status: string): InterfaceStatus {
+    const s = status.toLowerCase();
+    if (s === 'up' || s === 'enabled' || s === 'true') return 'up';
+    if (s === 'down' || s === 'disabled' || s === 'false') return 'down';
+    if (s === 'admin-down' || s === 'shutdown' || s === 'administratively-down') return 'admin-down';
+    return 'unknown';
   }
 
   /**
@@ -44,17 +81,80 @@ export class NetworkService {
       return { interfaces: mockData.mockInterfaces };
     }
 
-    // Use NETCONF to get interface configurations
+    // Protocol selection
+    if (this.shouldUseGnmi()) {
+      return this.getInterfacesViaGnmi();
+    }
+
+    return this.getInterfacesViaNetconf();
+  }
+
+  /**
+   * Get interfaces via gNMI
+   */
+  private async getInterfacesViaGnmi(): Promise<{ interfaces: InterfaceConfig[] }> {
+    const response = await this.gnmiClient.getAllInterfaces();
+
+    if (!response.success || !response.data) {
+      console.error('[NetworkService] Failed to get interfaces via gNMI:', response.error);
+      // Fallback to NETCONF
+      return this.getInterfacesViaNetconf();
+    }
+
+    // Parse gNMI response to InterfaceConfig[]
+    const interfaces = this.parseGnmiInterfaceData(response.data);
+    return { interfaces };
+  }
+
+  /**
+   * Get interfaces via NETCONF
+   */
+  private async getInterfacesViaNetconf(): Promise<{ interfaces: InterfaceConfig[] }> {
     const response = await this.netconfClient.getAllInterfaces();
 
     if (!response.success || !response.data) {
-      console.error('[NetworkService] Failed to get interfaces:', response.error);
+      console.error('[NetworkService] Failed to get interfaces via NETCONF:', response.error);
       return { interfaces: [] };
     }
 
     // Parse NETCONF response to InterfaceConfig[]
     const interfaces = this.parseInterfaceData(response.data);
     return { interfaces };
+  }
+
+  /**
+   * Parse gNMI interface data to InterfaceConfig[]
+   */
+  private parseGnmiInterfaceData(data: any): InterfaceConfig[] {
+    const interfaces: InterfaceConfig[] = [];
+
+    try {
+      // gNMI response structure - adapt based on actual device response
+      const interfaceData = data?.interface || data?.['interface-state'];
+
+      if (!interfaceData) {
+        console.warn('[NetworkService] No interface data in gNMI response');
+        return interfaces;
+      }
+
+      const interfaceList = Array.isArray(interfaceData) ? interfaceData : [interfaceData];
+
+      for (const iface of interfaceList) {
+        const rawStatus = iface.operationalStatus || iface.status || iface['oper-status'] || 'unknown';
+        interfaces.push({
+          name: iface.name || iface['interface-name'] || '',
+          ip: iface.address || iface.ip || 'unassigned',
+          status: this.normalizeInterfaceStatus(String(rawStatus)),
+          description: iface.description || '',
+          enabled: iface.enabled ?? true,
+          mtu: iface.mtu || 1500,
+        });
+      }
+    } catch (error) {
+      console.error('[NetworkService] Error parsing gNMI interface data:', error);
+    }
+
+    return interfaces;
   }
 
   /**
@@ -126,7 +226,7 @@ export class NetworkService {
   /**
    * Determine interface status from NETCONF data
    */
-  private determineInterfaceStatus(iface: any): string {
+  private determineInterfaceStatus(iface: any): InterfaceStatus {
     const adminStatus = iface['admin-status'] || iface['oper-status'];
     const operStatus = iface['oper-status'];
 
@@ -164,6 +264,15 @@ export class NetworkService {
       return mockData.getMockInterface(name) || null;
     }
 
+    if (this.shouldUseGnmi()) {
+      const response = await this.gnmiClient.getInterface(name);
+      if (response.success && response.data) {
+        const interfaces = this.parseGnmiInterfaceData(response.data);
+        return interfaces[0] || null;
+      }
+    }
+
+    // Fallback to NETCONF
     const response = await this.netconfClient.getInterface(name);
 
     if (!response.success || !response.data) {
@@ -199,6 +308,16 @@ export class NetworkService {
       };
     }
 
+    if (this.shouldUseGnmi()) {
+      const response = await this.gnmiClient.setInterface(request.name, request as unknown as Record<string, unknown>);
+      if (response.success) {
+        return {
+          message: `Interface ${request.name} configured successfully via gNMI`,
+          interface: request.name,
+        };
+      }
+    }
+
     // Use NETCONF to configure the interface
     const response = await this.netconfClient.configureInterface(request.name, request as unknown as Record<string, unknown>);
     if (!response.success) {
@@ -219,6 +338,14 @@ export class NetworkService {
       return { routes: mockData.mockRoutes };
     }
 
+    if (this.shouldUseGnmi()) {
+      const response = await this.gnmiClient.getRouting();
+      if (response.success && response.data) {
+        const routes = this.parseGnmiRouteData(response.data);
+        return { routes };
+      }
+    }
+
     // Use NETCONF to get routing table
     const response = await this.netconfClient.getRoutingTable();
 
@@ -230,6 +357,39 @@ export class NetworkService {
     // Parse NETCONF response to Route[]
     const routes = this.parseRouteData(response.data);
     return { routes };
+  }
+
+  /**
+   * Parse gNMI route data to Route[]
+   */
+  private parseGnmiRouteData(data: any): Route[] {
+    const routes: Route[] = [];
+
+    try {
+      const routeData = data?.route || data?.['route-table'];
+
+      if (!routeData) {
+        console.warn('[NetworkService] No route data in gNMI response');
+        return routes;
+      }
+
+      const routeList = Array.isArray(routeData) ? routeData : [routeData];
+
+      for (const route of routeList) {
+        routes.push({
+          destination: route.destination || route['dest-prefix'] || '0.0.0.0/0',
+          nextHop: route.nextHop || route['next-hop'] || '',
+          interface: route.outgoingInterface || route['out-interface'] || '',
+          protocol: route.protocol || route['route-protocol'] || 'unknown',
+          metric: route.metric || 0,
+          adminDistance: route.adminDistance || route['admin-distance'] || 0,
+        });
+      }
+    } catch (error) {
+      console.error('[NetworkService] Error parsing gNMI route data:', error);
+    }
+
+    return routes;
   }
 
   /**
@@ -309,6 +469,19 @@ export class NetworkService {
       };
     }
 
+    if (this.shouldUseGnmi()) {
+      const response = await this.gnmiClient.setRouting(
+        request.protocol,
+        request as unknown as Record<string, unknown>
+      );
+      if (response.success) {
+        return {
+          message: `Route configuration applied successfully via gNMI`,
+          protocol: request.protocol,
+        };
+      }
+    }
+
     // Use NETCONF to configure routing
     switch (request.protocol) {
       case 'static': {
@@ -372,6 +545,16 @@ export class NetworkService {
       return { message: 'Route removed successfully' };
     }
 
+    if (this.shouldUseGnmi()) {
+      const response = await this.gnmiClient.deleteRouting(
+        request.protocol,
+        request as unknown as Record<string, unknown>
+      );
+      if (response.success) {
+        return { message: 'Route removed successfully via gNMI' };
+      }
+    }
+
     // Use NETCONF to delete route
     // Implementation depends on protocol
     return { message: 'Route removed successfully' };
@@ -385,7 +568,7 @@ export class NetworkService {
       return { rules: mockData.mockFirewallRules };
     }
 
-    // Use NETCONF to get firewall rules
+    // Use NETCONF to get firewall rules (gNMI not commonly used for ACLs)
     const response = await this.netconfClient.getRunningConfig('<acl/>');
 
     if (!response.success) {

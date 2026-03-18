@@ -1,10 +1,11 @@
 /**
  * NETCONF Client for communicating with Cisco IOS XE devices
  * Uses NETCONF protocol over SSH using system ssh command
+ * Enhanced with session management similar to ncclient
  */
 
 import { spawn } from 'child_process';
-import type { NETCONFConfig } from '../types/index.js';
+import type { NETCONFConfig, NETCONFSessionInfo } from '../types/index.js';
 
 export interface NETCONFRPCRequest {
   target: 'candidate' | 'running';
@@ -108,49 +109,355 @@ function parseSimpleXML(xml: string): any {
  */
 export class NETCONFClient {
   private messageId = 1;
+  private sessionInfo: NETCONFSessionInfo = {
+    sessionId: undefined,
+    serverCapabilities: [],
+    initialized: false,
+  };
+  private autoConnect: boolean;
 
-  constructor(private config: NETCONFConfig) {}
+  constructor(private config: NETCONFConfig) {
+    this.autoConnect = config.autoConnect ?? true;
+  }
+
+  /**
+   * Get current session information
+   */
+  getSessionInfo(): NETCONFSessionInfo {
+    return { ...this.sessionInfo };
+  }
+
+  /**
+   * Check if session is initialized
+   */
+  isSessionInitialized(): boolean {
+    return this.sessionInfo.initialized;
+  }
+
+  /**
+   * Get server capabilities
+   */
+  getServerCapabilities(): string[] {
+    return [...this.sessionInfo.serverCapabilities];
+  }
+
+  /**
+   * Check if server supports a specific capability
+   */
+  hasCapability(capability: string): boolean {
+    return this.sessionInfo.serverCapabilities.some(cap =>
+      cap.includes(capability) || capability.includes(cap)
+    );
+  }
+
+  /**
+   * Connect and initialize NETCONF session
+   * Sends hello message and receives server capabilities
+   */
+  async connect(): Promise<NETCONFResponse> {
+    if (this.sessionInfo.initialized) {
+      return {
+        success: true,
+        data: { message: 'Session already initialized', sessionId: this.sessionInfo.sessionId },
+      };
+    }
+
+    try {
+      // Start SSH subprocess for NETCONF session
+      const helloMessage = this.buildHelloMessage();
+      const fullMessage = `${helloMessage}\n]]>]]>\n`;
+
+      console.log('[NETCONF] Connecting to', this.config.host, 'port', this.config.port);
+
+      // Execute hello exchange
+      const { stdout, stderr } = await this.execNetconf(fullMessage);
+
+      console.log('[NETCONF] Received response, stdout length:', stdout.length, 'stderr:', stderr);
+
+      // Parse server's hello response
+      const parsed = this.parseHelloResponse(stdout);
+
+      if (parsed) {
+        this.sessionInfo.sessionId = parsed.sessionId;
+        this.sessionInfo.serverCapabilities = parsed.capabilities;
+        this.sessionInfo.initialized = true;
+
+        console.log(`[NETCONF] Session established. ID: ${this.sessionInfo.sessionId}`);
+        console.log(`[NETCONF] Server capabilities: ${this.sessionInfo.serverCapabilities.length} found`);
+
+        return {
+          success: true,
+          data: {
+            sessionId: this.sessionInfo.sessionId,
+            capabilities: this.sessionInfo.serverCapabilities,
+          },
+        };
+      }
+
+      return {
+        success: false,
+        error: 'Failed to parse server hello response',
+      };
+    } catch (error: any) {
+      console.error('[NETCONF] Connection error:', error);
+      return {
+        success: false,
+        error: error?.message || String(error),
+      };
+    }
+  }
+
+  /**
+   * Close NETCONF session gracefully
+   */
+  async close(): Promise<NETCONFResponse> {
+    if (!this.sessionInfo.initialized) {
+      return { success: true, data: { message: 'No active session to close' } };
+    }
+
+    try {
+      const closeRpc = this.buildCloseSessionRPC();
+      await this.sendRPC(closeRpc);
+
+      // Reset session state
+      this.sessionInfo = {
+        sessionId: undefined,
+        serverCapabilities: [],
+        initialized: false,
+      };
+
+      console.log('[NETCONF] Session closed');
+      return { success: true, data: { message: 'Session closed successfully' } };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to close session',
+      };
+    }
+  }
+
+  /**
+   * Build NETCONF hello message
+   */
+  private buildHelloMessage(): string {
+    const capabilities = [
+      'urn:ietf:params:netconf:base:1.0',
+      'urn:ietf:params:netconf:base:1.1',
+      'urn:ietf:params:netconf:capability:writable-running:1.0',
+      'urn:ietf:params:netconf:capability:candidate:1.0',
+      'urn:ietf:params:netconf:capability:confirmed-commit:1.0',
+      'urn:ietf:params:netconf:capability:rollback-on-error:1.0',
+      'urn:ietf:params:netconf:capability:startup:1.0',
+      'urn:ietf:params:netconf:capability:url:1.0',
+      'urn:ietf:params:netconf:capability:validate:1.0',
+      'urn:ietf:params:netconf:capability:xpath:1.0',
+    ];
+
+    return `<?xml version="1.0" encoding="UTF-8"?>
+<hello xmlns="urn:ietf:params:xml:ns:netconf:base:1.0">
+  <capabilities>
+${capabilities.map(cap => `    <capability>${cap}</capability>`).join('\n')}
+  </capabilities>
+</hello>`;
+  }
+
+  /**
+   * Parse server's hello response
+   */
+  private parseHelloResponse(response: string): { sessionId?: string; capabilities: string[] } | null {
+    try {
+      // Clean response - remove delimiters
+      let clean = response
+        .replace(/]]>]]>\n?/g, '')
+        .replace(/^#\d+\n/g, '')
+        .trim();
+
+      // Parse XML
+      const parsed = parseSimpleXML(clean);
+      const hello = parsed?.['hello'];
+
+      if (!hello) {
+        console.error('[NETCONF] No hello element in response, parsed:', parsed);
+        return null;
+      }
+
+      // Extract session ID
+      const sessionId = hello['session-id'];
+
+      // Extract capabilities
+      const caps: string[] = [];
+      const capabilities = hello['capabilities']?.['capability'];
+      if (capabilities) {
+        const capArray = Array.isArray(capabilities) ? capabilities : [capabilities];
+        for (const cap of capArray) {
+          if (typeof cap === 'string') {
+            caps.push(cap);
+          }
+        }
+      }
+
+      return { sessionId, capabilities: caps };
+    } catch (error) {
+      console.error('[NETCONF] Error parsing hello response:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Build close-session RPC
+   */
+  private buildCloseSessionRPC(): string {
+    const xmlns = 'urn:ietf:params:xml:ns:netconf:base:1.0';
+    return `<?xml version="1.0" encoding="UTF-8"?>
+<rpc xmlns="${xmlns}" message-id="${this.messageId++}">
+  <close-session/>
+</rpc>`;
+  }
+
+  /**
+   * Ensure session is initialized before sending RPCs
+   */
+  private async ensureSession(): Promise<void> {
+    if (this.autoConnect && !this.sessionInfo.initialized) {
+      await this.connect();
+    }
+  }
+
+  /**
+   * Get all data (get without filter) - useful for full data retrieval
+   */
+  async getAll(): Promise<NETCONFResponse> {
+    await this.ensureSession();
+
+    return this.execute({
+      target: 'running',
+      operation: 'get',
+      filter: undefined,
+    });
+  }
+
+  /**
+   * Build SSH command with options for legacy Cisco RSA keys
+   * Modern SSH clients disable ssh-rsa by default, Cisco routers use it
+   */
+  private buildSSHCommand(): string {
+    // SSH options needed for older Cisco IOS XE with RSA keys
+    const sshOptions = [
+      '-p', String(this.config.port),
+      '-o', 'StrictHostKeyChecking=no',
+      '-o', 'UserKnownHostsFile=/dev/null',
+      '-o', 'ConnectTimeout=10',
+      // Explicitly enable older RSA key types that Cisco uses
+      '-o', 'HostKeyAlgorithms=ssh-rsa',
+      '-o', 'PubkeyAcceptedKeyTypes=+ssh-rsa',
+      // Enable older key exchange algorithms
+      '-o', 'KexAlgorithms=+diffie-hellman-group1-sha1,diffie-hellman-group14-sha1',
+      // Use weaker ciphers if needed
+      '-o', 'Ciphers=+aes128-cbc,aes192-cbc,aes256-cbc',
+    ];
+
+    return `sshpass -p '${this.config.password}' ssh ${sshOptions.join(' ')} ${this.config.username}@${this.config.host} netconf`;
+  }
 
   /**
    * Execute NETCONF command via SSH using sshpass for password auth
+   * Keeps stdin open to allow router time to respond
    */
   private async execNetconf(command: string): Promise<{ stdout: string; stderr: string }> {
     return new Promise((resolve, reject) => {
-      // Use sshpass to provide password non-interactively
-      const sshCmd = `sshpass -p '${this.config.password}' ssh -p ${this.config.port} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -o HostKeyAlgorithms=+ssh-rsa -o PubkeyAcceptedKeyTypes=+ssh-rsa -o KexAlgorithms=+diffie-hellman-group-exchange-sha1,diffie-hellman-group1-sha1 ${this.config.username}@${this.config.host} netconf`;
+      const sshCmd = this.buildSSHCommand();
+      const timeout = this.config.timeout || 30000;
+
+      console.log('[NETCONF] Executing SSH command');
 
       const proc = spawn('sh', ['-c', sshCmd], {
         stdio: ['pipe', 'pipe', 'pipe'],
-        timeout: 30000,
+        timeout,
       });
 
       let stdout = '';
       let stderr = '';
+      let resolved = false;
+      let receiveTimeout: NodeJS.Timeout | null = null;
+
+      const cleanup = () => {
+        if (receiveTimeout) {
+          clearTimeout(receiveTimeout);
+          receiveTimeout = null;
+        }
+      };
+
+      const resolveOnce = () => {
+        if (!resolved) {
+          resolved = true;
+          cleanup();
+          // Close stdin to signal we're done - ignore errors
+          try {
+            proc.stdin?.end();
+          } catch {
+            // Ignore - stdin might already be closed
+          }
+          // Give it a moment to finish, then resolve
+          setTimeout(() => {
+            resolve({ stdout, stderr });
+          }, 100);
+        }
+      };
 
       proc.stdout?.on('data', (data) => {
         stdout += data.toString();
+        // Start timeout after receiving first data
+        if (!receiveTimeout && stdout.length > 0) {
+          // Wait a bit for more data, then resolve
+          receiveTimeout = setTimeout(() => {
+            console.log('[NETCONF] Response received, length:', stdout.length);
+            resolveOnce();
+          }, 500);
+        }
       });
 
       proc.stderr?.on('data', (data) => {
         stderr += data.toString();
       });
 
-      proc.on('close', (code) => {
-        if (code === 0 || stdout.length > 0) {
+      proc.on('close', () => {
+        cleanup();
+        if (!resolved) {
+          console.log('[NETCONF] Process closed, stdout length:', stdout.length);
+          resolved = true;
+          // Accept any response we got, even with non-zero exit
           resolve({ stdout, stderr });
-        } else {
-          reject(new Error(`SSH exited with code ${code}: ${stderr}`));
         }
       });
 
       proc.on('error', (err) => {
-        reject(new Error(`SSH connection error: ${err.message}`));
+        cleanup();
+        if (!resolved) {
+          resolved = true;
+          reject(new Error(`SSH connection error: ${err?.message || 'Unknown error'}`));
+        }
       });
 
       // Send command to stdin
       if (command) {
-        proc.stdin?.write(command);
-        proc.stdin?.end();
+        try {
+          proc.stdin?.write(command);
+        } catch (err) {
+          cleanup();
+          if (!resolved) {
+            resolved = true;
+            reject(new Error(`Failed to write to stdin: ${err}`));
+          }
+          return;
+        }
+        // Don't close stdin immediately - let the router respond
+        // Set a safety timeout in case we never get a response
+        setTimeout(() => {
+          if (!resolved) {
+            console.warn('[NETCONF] Response timeout, closing connection');
+            resolveOnce();
+          }
+        }, timeout);
       } else {
         // For interactive session, keep alive briefly
         setTimeout(() => {
@@ -193,10 +500,10 @@ export class NETCONFClient {
         data: parsed?.['rpc-reply'],
         rawXml: responseXml,
       };
-    } catch (error) {
+    } catch (error: any) {
       return {
         success: false,
-        error: error instanceof Error ? error.message : 'Unknown error',
+        error: error?.message || String(error),
       };
     }
   }
@@ -255,6 +562,9 @@ export class NETCONFClient {
    * Execute NETCONF RPC request
    */
   async execute(request: NETCONFRPCRequest): Promise<NETCONFResponse> {
+    // Auto-connect if session not initialized
+    await this.ensureSession();
+
     try {
       let rpcXml = '';
 
@@ -274,10 +584,10 @@ export class NETCONFClient {
 
       console.log(`[NETCONF] ${request.operation} on ${request.target}`);
       return await this.sendRPC(rpcXml);
-    } catch (error) {
+    } catch (error: any) {
       return {
         success: false,
-        error: error instanceof Error ? error.message : 'Unknown error',
+        error: error?.message || String(error),
       };
     }
   }
@@ -345,7 +655,7 @@ export class NETCONFClient {
    * Configure static route
    */
   async configureStaticRoute(destination: string, nextHop?: string, interfaceName?: string): Promise<NETCONFResponse> {
-    const configXml = `<ip-route xmlns="http://cisco.com/ns/yang/Cisco-IOS-XE-ip"><ip-route-interface-forwarding-list><ip-forwarding-list><destination>${destination}</destination>${nextHop ? `<next-hop>${nextHop}</next-hop>` : ''}${interfaceName ? `<fwd-out-interface>${interfaceName}</fwd-out-interface>` : ''}</ip-forwarding-list></ip-route-interface-forwarding-list></ip-route>`;
+    const configXml = `<ip-route xmlns="http://cisco.com/ns/yang/Cisco-IOS-XE-ip"><ip-route-interface-forwarding-list"><ip-forwarding-list><destination>${destination}</destination>${nextHop ? `<next-hop>${nextHop}</next-hop>` : ''}${interfaceName ? `<fwd-out-interface>${interfaceName}</fwd-out-interface>` : ''}</ip-forwarding-list></ip-route-interface-forwarding-list></ip-route>`;
     return this.execute({
       target: 'candidate',
       operation: 'edit-config',
@@ -405,7 +715,7 @@ export class NETCONFClient {
    * Build interface configuration XML
    */
   private buildInterfaceConfigXml(name: string, config: Record<string, unknown>): string {
-    return `<interface xmlns="http://cisco.com/ns/yang/Cisco-IXENE-native"><name>${name}</name>${config.ip ? `<ipv4><address><primary><address>${config.ip}</address></primary></address></ipv4>` : ''}${config.description ? `<description>${config.description}</description>` : ''}${config.enabled !== undefined ? `<shutdown>${!config.enabled}</shutdown>` : ''}${config.mtu ? `<mtu>${config.mtu}</mtu>` : ''}</interface>`;
+    return `<interface xmlns="http://cisco.com/ns/yang/Cisco-IOS-XE-native"><name>${name}</name>${config.ip ? `<ipv4><address><primary><address>${config.ip}</address></primary></address></ipv4>` : ''}${config.description ? `<description>${config.description}</description>` : ''}${config.enabled !== undefined ? `<shutdown>${!config.enabled}</shutdown>` : ''}${config.mtu ? `<mtu>${config.mtu}</mtu>` : ''}</interface>`;
   }
 
   /**
