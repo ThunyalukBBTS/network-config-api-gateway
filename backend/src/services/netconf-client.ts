@@ -22,7 +22,7 @@ export interface NETCONFResponse {
 }
 
 /**
- * Parse XML to JavaScript object (simple parser for NETCONF responses)
+ * Parse XML to JavaScript object (improved parser for NETCONF responses)
  */
 function parseSimpleXML(xml: string): any {
   const result: any = {};
@@ -34,7 +34,7 @@ function parseSimpleXML(xml: string): any {
     .trim();
 
   // Parse root element
-  const rootMatch = cleanXml.match(/<(\w+(?::\w+)?)([\s\S]*)>([\s\S]*)<\/\1>/);
+  const rootMatch = cleanXml.match(/<(\w+(?::\w+)?)(?:\s[^>]*)?>([\s\S]*)<\/\1>/);
   if (!rootMatch) {
     // Try self-closing tag
     const selfCloseMatch = cleanXml.match(/<(\w+(?::\w+)?)([^>]*)\/>/);
@@ -46,62 +46,108 @@ function parseSimpleXML(xml: string): any {
     return null;
   }
 
-  const [, tagName, , content] = rootMatch;
-  const parsedContent: any = {};
+  const tagName = rootMatch[1];
+  const content = rootMatch[2];  // content is in index 2
 
-  // Parse child elements
-  let remainingContent = content.trim();
-  while (remainingContent) {
-    // Check for opening tag
-    const openTagMatch = remainingContent.match(/^<(\w+(?::\w+)?)([^>]*)>/);
-    if (!openTagMatch) break;
+  // Parse child elements recursively
+  const parsedContent = parseChildren(content);
 
-    const childName = openTagMatch[1];
-    const closeTag = `</${childName}>`;
-    const closeIndex = remainingContent.indexOf(closeTag, openTagMatch[0].length);
+  result[tagName] = Object.keys(parsedContent).length > 0 ? parsedContent : content;
+  return result;
+}
 
-    if (closeIndex === -1) {
-      // Self-closing tag
-      if (remainingContent[openTagMatch[0].length] === '/') {
-        remainingContent = remainingContent.slice(openTagMatch[0].length + 1).trim();
-        continue;
-      }
-      break;
+/**
+ * Parse child elements from XML content
+ */
+function parseChildren(content: string): any {
+  const parsed: any = {};
+  let remaining = content;
+
+  while (remaining.length > 0) {
+    // Skip whitespace
+    remaining = remaining.trim();
+    if (remaining.length === 0) break;
+
+    // Find opening tag - include namespace handling (e.g., hello xmlns="...")
+    const openMatch = remaining.match(/^<(\w+(?::\w+)?)(?:\s[^>]*)?>/);
+    if (!openMatch) {
+      // If no tag found but there's content, it's text content - skip
+      remaining = remaining.slice(1).trim();
+      continue;
     }
 
-    const childContent = remainingContent.slice(openTagMatch[0].length, closeIndex).trim();
-    remainingContent = remainingContent.slice(closeIndex + closeTag.length).trim();
+    const childName = openMatch[1];
+    const fullOpenTag = openMatch[0];
+    const closeTag = `</${childName}>`;
 
-    // Check if child has nested elements or just text
-    if (childContent.includes('<')) {
-      // Recursively parse nested elements
-      const nested = parseSimpleXML(childContent);
-      if (nested) {
-        if (parsedContent[childName]) {
-          // Convert to array if multiple elements with same name
-          if (!Array.isArray(parsedContent[childName])) {
-            parsedContent[childName] = [parsedContent[childName]];
+    // Check for self-closing tag (ends with />)
+    const isSelfClosing = fullOpenTag.trim().endsWith('/>');
+    if (isSelfClosing) {
+      remaining = remaining.slice(fullOpenTag.length).trim();
+      // Self-closing element becomes empty object
+      if (!parsed[childName]) {
+        parsed[childName] = {};
+      } else if (!Array.isArray(parsed[childName])) {
+        parsed[childName] = [parsed[childName], {}];
+      } else {
+        parsed[childName].push({});
+      }
+      continue;
+    }
+
+    const closeIndex = remaining.indexOf(closeTag, fullOpenTag.length);
+
+    if (closeIndex === -1) {
+      // No closing tag found - skip this tag
+      remaining = remaining.slice(fullOpenTag.length).trim();
+      continue;
+    }
+
+    const childContent = remaining.slice(fullOpenTag.length, closeIndex).trim();
+    remaining = remaining.slice(closeIndex + closeTag.length).trim();
+
+    // Check if childContent contains any tags (nested elements)
+    const hasNestedTags = /<\w+/.test(childContent);
+
+    if (!hasNestedTags && childContent.length > 0) {
+      // Primitive value (text content only)
+      const value = childContent;
+      if (parsed[childName] !== undefined) {
+        if (!Array.isArray(parsed[childName])) {
+          parsed[childName] = [parsed[childName]];
+        }
+        parsed[childName].push(value);
+      } else {
+        parsed[childName] = value;
+      }
+    } else if (hasNestedTags) {
+      // Has nested elements - parse recursively
+      const childValue = parseSimpleXML(`<${childName}>${childContent}</${childName}>`);
+      if (childValue && childValue[childName] !== undefined) {
+        const value = childValue[childName];
+        if (parsed[childName] !== undefined) {
+          if (!Array.isArray(parsed[childName])) {
+            parsed[childName] = [parsed[childName]];
           }
-          parsedContent[childName].push(nested[childName] || nested);
+          parsed[childName].push(value);
         } else {
-          parsedContent[childName] = nested[childName] || nested;
+          parsed[childName] = value;
+        }
+      } else {
+        // Parsing failed but there were nested tags - store as empty object
+        if (parsed[childName] === undefined) {
+          parsed[childName] = {};
         }
       }
     } else {
-      // Text content
-      if (parsedContent[childName]) {
-        if (!Array.isArray(parsedContent[childName])) {
-          parsedContent[childName] = [parsedContent[childName]];
-        }
-        parsedContent[childName].push(childContent);
-      } else {
-        parsedContent[childName] = childContent;
+      // Empty element
+      if (parsed[childName] === undefined) {
+        parsed[childName] = {};
       }
     }
   }
 
-  result[tagName] = Object.keys(parsedContent).length > 0 ? parsedContent : content;
-  return result;
+  return parsed;
 }
 
 /**
@@ -115,6 +161,9 @@ export class NETCONFClient {
     initialized: false,
   };
   private autoConnect: boolean;
+  private sshProcess: any = null;
+  private sshStdin: any = null;
+  private sshStdout: any = null;
 
   constructor(private config: NETCONFConfig) {
     this.autoConnect = config.autoConnect ?? true;
@@ -163,16 +212,23 @@ export class NETCONFClient {
     }
 
     try {
-      // Start SSH subprocess for NETCONF session
+      // Start SSH subprocess for NETCONF session (persistent)
       const helloMessage = this.buildHelloMessage();
-      const fullMessage = `${helloMessage}\n]]>]]>\n`;
 
       console.log('[NETCONF] Connecting to', this.config.host, 'port', this.config.port);
 
-      // Execute hello exchange
-      const { stdout, stderr } = await this.execNetconf(fullMessage);
+      // Start persistent SSH connection
+      this.sshProcess = this.startSSHProcess();
+      await this.waitForSSHReady();
 
-      console.log('[NETCONF] Received response, stdout length:', stdout.length, 'stderr:', stderr);
+      // Send hello message
+      const fullMessage = `${helloMessage}\n]]>]]>\n`;
+      await this.sendToSSH(fullMessage);
+
+      // Receive hello response
+      const stdout = await this.receiveFromSSH();
+
+      console.log('[NETCONF] Received hello response, length:', stdout.length);
 
       // Parse server's hello response
       const parsed = this.parseHelloResponse(stdout);
@@ -200,10 +256,145 @@ export class NETCONFClient {
       };
     } catch (error: any) {
       console.error('[NETCONF] Connection error:', error);
+      this.closeConnection();
       return {
         success: false,
         error: error?.message || String(error),
       };
+    }
+  }
+
+  /**
+   * Start SSH process for persistent connection
+   */
+  private startSSHProcess() {
+    const sshCmd = this.buildSSHCommand();
+    const timeout = this.config.timeout || 30000;
+
+    console.log('[NETCONF] Starting SSH process');
+
+    const proc = spawn('sh', ['-c', sshCmd], {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      timeout,
+    });
+
+    // Log stderr for debugging
+    proc.stderr?.on('data', (data: Buffer) => {
+      console.error('[NETCONF] SSH stderr:', data.toString());
+    });
+
+    proc.on('close', (code: number) => {
+      console.log('[NETCONF] SSH process closed with code:', code);
+      this.sessionInfo.initialized = false;
+      this.sshProcess = null;
+    });
+
+    proc.on('error', (err: Error) => {
+      console.error('[NETCONF] SSH process error:', err);
+    });
+
+    this.sshStdin = proc.stdin;
+    this.sshStdout = proc.stdout;
+
+    return proc;
+  }
+
+  /**
+   * Wait for SSH stdout to be ready
+   */
+  private async waitForSSHReady(): Promise<void> {
+    return new Promise((resolve) => {
+      if (!this.sshStdout) {
+        resolve();
+        return;
+      }
+
+      // Wait for any initial output
+      const timeout = setTimeout(() => {
+        console.log('[NETCONF] SSH ready timeout - continuing');
+        resolve();
+      }, 1000);
+
+      this.sshStdout.once('data', () => {
+        clearTimeout(timeout);
+        console.log('[NETCONF] SSH stdout ready');
+        resolve();
+      });
+    });
+  }
+
+  /**
+   * Send data to SSH process
+   */
+  private async sendToSSH(data: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+      if (!this.sshStdin) {
+        reject(new Error('SSH stdin not available'));
+        return;
+      }
+
+      this.sshStdin.write(data, (err?: Error) => {
+        if (err) {
+          reject(err);
+        } else {
+          console.log('[NETCONF] Sent data to SSH');
+          resolve();
+        }
+      });
+    });
+  }
+
+  /**
+   * Receive data from SSH process
+   */
+  private async receiveFromSSH(): Promise<string> {
+    return new Promise((resolve) => {
+      if (!this.sshStdout) {
+        resolve('');
+        return;
+      }
+
+      let stdout = '';
+      let resolved = false;
+      const timeout = this.config.timeout || 5000;
+
+      const resolveOnce = () => {
+        if (!resolved) {
+          resolved = true;
+          console.log('[NETCONF] Received data from SSH, length:', stdout.length);
+          resolve(stdout);
+        }
+      };
+
+      const onData = (data: Buffer) => {
+        stdout += data.toString();
+        // Wait a bit after receiving data for more to arrive
+        setTimeout(resolveOnce, 200);
+      };
+
+      this.sshStdout.once('data', onData);
+
+      // Fallback timeout
+      setTimeout(() => {
+        this.sshStdout?.removeListener('data', onData);
+        resolveOnce();
+      }, timeout);
+    });
+  }
+
+  /**
+   * Close the SSH connection
+   */
+  private closeConnection(): void {
+    if (this.sshProcess) {
+      try {
+        this.sshProcess.kill();
+      } catch {
+        // Ignore
+      }
+      this.sshProcess = null;
+      this.sshStdin = null;
+      this.sshStdout = null;
     }
   }
 
@@ -217,7 +408,11 @@ export class NETCONFClient {
 
     try {
       const closeRpc = this.buildCloseSessionRPC();
-      await this.sendRPC(closeRpc);
+      await this.sendToSSH(`${closeRpc}\n]]>]]>\n`);
+      await this.receiveFromSSH(); // Wait for response
+
+      // Close SSH connection
+      this.closeConnection();
 
       // Reset session state
       this.sessionInfo = {
@@ -272,23 +467,47 @@ ${capabilities.map(cap => `    <capability>${cap}</capability>`).join('\n')}
         .replace(/^#\d+\n/g, '')
         .trim();
 
+      console.log('[NETCONF] ===== RAW HELLO XML =====');
+      console.log(clean);
+      console.log('[NETCONF] ===== END RAW XML =====');
+
       // Parse XML
       const parsed = parseSimpleXML(clean);
+      console.log('[NETCONF] Full parsed result:');
+      console.log(JSON.stringify(parsed, null, 2));
+
       const hello = parsed?.['hello'];
+      console.log('[NETCONF] Hello element type:', typeof hello);
+      console.log('[NETCONF] Hello element keys:', hello ? Object.keys(hello) : 'N/A');
 
       if (!hello) {
-        console.error('[NETCONF] No hello element in response, parsed:', parsed);
+        console.error('[NETCONF] No hello element in response');
         return null;
       }
 
-      // Extract session ID
-      const sessionId = hello['session-id'];
+      // Check if hello is an object or a string (parser issue)
+      if (typeof hello === 'string') {
+        console.error('[NETCONF] Hello parsed as string instead of object:', hello.substring(0, 100));
+        return null;
+      }
+
+      // Extract session ID - try both with and without hyphen
+      const sessionId = hello['session-id'] || hello['sessionId'] || hello['session_id'];
+      console.log('[NETCONF] Session ID extraction attempt:', {
+        'session-id': hello['session-id'],
+        'sessionId': hello['sessionId'],
+        'session_id': hello['session_id'],
+        'final': sessionId,
+      });
 
       // Extract capabilities
       const caps: string[] = [];
       const capabilities = hello['capabilities']?.['capability'];
+      console.log('[NETCONF] Capabilities object:', JSON.stringify(capabilities, null, 2).substring(0, 500));
+
       if (capabilities) {
         const capArray = Array.isArray(capabilities) ? capabilities : [capabilities];
+        console.log('[NETCONF] Capabilities array length:', capArray.length);
         for (const cap of capArray) {
           if (typeof cap === 'string') {
             caps.push(cap);
@@ -296,6 +515,7 @@ ${capabilities.map(cap => `    <capability>${cap}</capability>`).join('\n')}
         }
       }
 
+      console.log('[NETCONF] Found capabilities:', caps.length);
       return { sessionId, capabilities: caps };
     } catch (error) {
       console.error('[NETCONF] Error parsing hello response:', error);
@@ -360,120 +580,21 @@ ${capabilities.map(cap => `    <capability>${cap}</capability>`).join('\n')}
   }
 
   /**
-   * Execute NETCONF command via SSH using sshpass for password auth
-   * Keeps stdin open to allow router time to respond
-   */
-  private async execNetconf(command: string): Promise<{ stdout: string; stderr: string }> {
-    return new Promise((resolve, reject) => {
-      const sshCmd = this.buildSSHCommand();
-      const timeout = this.config.timeout || 30000;
-
-      console.log('[NETCONF] Executing SSH command');
-
-      const proc = spawn('sh', ['-c', sshCmd], {
-        stdio: ['pipe', 'pipe', 'pipe'],
-        timeout,
-      });
-
-      let stdout = '';
-      let stderr = '';
-      let resolved = false;
-      let receiveTimeout: NodeJS.Timeout | null = null;
-
-      const cleanup = () => {
-        if (receiveTimeout) {
-          clearTimeout(receiveTimeout);
-          receiveTimeout = null;
-        }
-      };
-
-      const resolveOnce = () => {
-        if (!resolved) {
-          resolved = true;
-          cleanup();
-          // Close stdin to signal we're done - ignore errors
-          try {
-            proc.stdin?.end();
-          } catch {
-            // Ignore - stdin might already be closed
-          }
-          // Give it a moment to finish, then resolve
-          setTimeout(() => {
-            resolve({ stdout, stderr });
-          }, 100);
-        }
-      };
-
-      proc.stdout?.on('data', (data) => {
-        stdout += data.toString();
-        // Start timeout after receiving first data
-        if (!receiveTimeout && stdout.length > 0) {
-          // Wait a bit for more data, then resolve
-          receiveTimeout = setTimeout(() => {
-            console.log('[NETCONF] Response received, length:', stdout.length);
-            resolveOnce();
-          }, 500);
-        }
-      });
-
-      proc.stderr?.on('data', (data) => {
-        stderr += data.toString();
-      });
-
-      proc.on('close', () => {
-        cleanup();
-        if (!resolved) {
-          console.log('[NETCONF] Process closed, stdout length:', stdout.length);
-          resolved = true;
-          // Accept any response we got, even with non-zero exit
-          resolve({ stdout, stderr });
-        }
-      });
-
-      proc.on('error', (err) => {
-        cleanup();
-        if (!resolved) {
-          resolved = true;
-          reject(new Error(`SSH connection error: ${err?.message || 'Unknown error'}`));
-        }
-      });
-
-      // Send command to stdin
-      if (command) {
-        try {
-          proc.stdin?.write(command);
-        } catch (err) {
-          cleanup();
-          if (!resolved) {
-            resolved = true;
-            reject(new Error(`Failed to write to stdin: ${err}`));
-          }
-          return;
-        }
-        // Don't close stdin immediately - let the router respond
-        // Set a safety timeout in case we never get a response
-        setTimeout(() => {
-          if (!resolved) {
-            console.warn('[NETCONF] Response timeout, closing connection');
-            resolveOnce();
-          }
-        }, timeout);
-      } else {
-        // For interactive session, keep alive briefly
-        setTimeout(() => {
-          proc.kill();
-        }, 100);
-      }
-    });
-  }
-
-  /**
-   * Send NETCONF RPC and get response
+   * Send NETCONF RPC and get response using persistent connection
    */
   private async sendRPC(rpcXml: string): Promise<NETCONFResponse> {
     try {
+      // Ensure SSH process is running
+      if (!this.sshProcess || !this.sshStdin || !this.sshStdout) {
+        return {
+          success: false,
+          error: 'SSH connection not established. Call connect() first.',
+        };
+      }
+
       const message = `${rpcXml}\n]]>]]>\n`;
-      const { stdout } = await this.execNetconf(message);
+      await this.sendToSSH(message);
+      const stdout = await this.receiveFromSSH();
 
       // Remove NETCONF message delimiters
       let responseXml = stdout
@@ -481,6 +602,10 @@ ${capabilities.map(cap => `    <capability>${cap}</capability>`).join('\n')}
         .replace(/^#\d+\n/g, '')
         .replace(/\n##$/g, '')
         .trim();
+
+      console.log('[NETCONF] ===== RAW RPC RESPONSE =====');
+      console.log(responseXml);
+      console.log('[NETCONF] ===== END RAW RESPONSE =====');
 
       // Parse XML response
       const parsed = parseSimpleXML(responseXml);
@@ -655,7 +780,7 @@ ${capabilities.map(cap => `    <capability>${cap}</capability>`).join('\n')}
    * Configure static route
    */
   async configureStaticRoute(destination: string, nextHop?: string, interfaceName?: string): Promise<NETCONFResponse> {
-    const configXml = `<ip-route xmlns="http://cisco.com/ns/yang/Cisco-IOS-XE-ip"><ip-route-interface-forwarding-list"><ip-forwarding-list><destination>${destination}</destination>${nextHop ? `<next-hop>${nextHop}</next-hop>` : ''}${interfaceName ? `<fwd-out-interface>${interfaceName}</fwd-out-interface>` : ''}</ip-forwarding-list></ip-route-interface-forwarding-list></ip-route>`;
+    const configXml = `<ip-route xmlns="http://cisco.com/ns/yang/Cisco-IOS-XE-ip"><ip-route-interface-forwarding-list><ip-forwarding-list><destination>${destination}</destination>${nextHop ? `<next-hop>${nextHop}</next-hop>` : ''}${interfaceName ? `<fwd-out-interface>${interfaceName}</fwd-out-interface>` : ''}</ip-forwarding-list></ip-route-interface-forwarding-list></ip-route>`;
     return this.execute({
       target: 'candidate',
       operation: 'edit-config',
