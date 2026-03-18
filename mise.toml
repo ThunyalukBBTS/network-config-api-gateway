@@ -60,3 +60,9 @@ run = "cd backend && rm -rf dist/"
 [tasks.mock-frr]
 description = "create frr container and create int yang model for test"
 run = "cd docker && docker compose -f docker-compose_frr.yml up -d --build && python ./testfrr/create_int.py && python ./testfrr/testNC.py"
+
+[tasks.srl-up]
+run = "cd docker && docker compose -f docker-compose-srl.yml up -d"
+
+[tasks.srl-down]
+run = "cd docker && docker compose -f docker-compose-srl.yml down"

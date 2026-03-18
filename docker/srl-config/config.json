@@ -1,0 +1,28 @@
+{
+  "srl_nokia-system:system": {
+    "name": "srl01",
+    "srl_nokia-gnmi:gnmi-server": {
+      "admin-state": "enable",
+      "network-instance": "mgmt"
+    },
+    "srl_nokia-netconf:netconf-server": {
+      "admin-state": "enable",
+      "network-instance": "mgmt"
+    },
+    "srl_nokia-cli:cli": {
+      "startup-config-source": "flash"
+    }
+  },
+  "srl_nokia-mgmt-network-instance:mgmt": {
+    "admin-state": "enable",
+    "interface": {
+      "ethernet-1/1": {}
+    }
+  },
+  "srl_nokia-interfaces:interface": {
+    "ethernet-1/1": {
+      "admin-state": "enable",
+      "description": "Management Interface"
+    }
+  }
+}

@@ -1,0 +1,72 @@
+# Nokia SR Linux with gNMI and NETCONF support
+# SR Linux has native gNMI support on port 57400
+#
+# Usage:
+#   docker-compose -f docker-compose-srl.yml up -d
+#
+# Default credentials:
+#   Username: admin
+#   Password: Admin123
+#
+# Access:
+#   gNMI:   localhost:57400
+#   SSH:    localhost:22
+#   Web UI: http://localhost:8080
+#   JSON-RPC: http://localhost:8080/jsonrpc
+
+version: '3.8'
+
+services:
+  srl:
+    image: ghcr.io/nokia/srlinux:latest
+    container_name: srlinux-router
+    hostname: srl01
+    privileged: true
+    network_mode: bridge
+    ports:
+      # gNMI (gRPC) - main gNMI port
+      - "57400:57400"
+      # gNMI with TLS (optional)
+      - "57401:57401"
+      # NETCONF port
+      - "830:830"
+      # SSH for management
+      - "2222:22"
+      # HTTP/HTTPS for Web UI and JSON-RPC
+      - "8080:80"
+      - "443:443"
+    environment:
+      # Type: single-node, standalone, or multi-node
+      - SRLINUX_CONFIG_TYPE=single-node
+      # Set default password for admin user
+      - SRLINUX_PASSWORD=Admin123
+      # Enable gNMI server
+      - SRLINUX_GNMI_ENABLED=true
+      # Enable NETCONF
+      - SRLINUX_NETCONF_ENABLED=true
+    volumes:
+      # Persist configuration
+      - srl-config:/etc/opt/srlinux
+      # Custom startup config (optional)
+      - ./srl-config:/etc/srlinux/config:ro
+    cap_add:
+      - NET_ADMIN
+      - SYS_ADMIN
+      - NET_RAW
+    command: >
+      bash -c "
+        sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1 || true &&
+        chmod 755 /opt/srlinux/bin/sr_* 2>/dev/null || true &&
+        /opt/srlinux/bin/sr_linux &&
+        tail -f /dev/null
+      "
+    healthcheck:
+      test: ["CMD", "pgrep", "-f", "sr_linux"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+volumes:
+  srl-config:
+    driver: local
