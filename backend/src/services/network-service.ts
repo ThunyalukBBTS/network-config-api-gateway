@@ -7,7 +7,7 @@
 
 import { config } from '../config/index.js';
 import { NETCONFClient } from './netconf-client.js';
-import { GNMIClient } from './gnmi-client.js';
+import { GNMIClient, mapToCliInterfaceName, type SRL_GNMI_PATHS } from './gnmi-client.js';
 import * as mockData from './mock-data.js';
 import type {
   InterfaceConfig,
@@ -124,13 +124,29 @@ export class NetworkService {
 
   /**
    * Parse gNMI interface data to InterfaceConfig[]
+   * Handles SR Linux response format from srl_nokia-interfaces YANG model
    */
   private parseGnmiInterfaceData(data: any): InterfaceConfig[] {
     const interfaces: InterfaceConfig[] = [];
 
     try {
-      // gNMI response structure - adapt based on actual device response
-      const interfaceData = data?.interface || data?.['interface-state'];
+      // SR Linux gNMI response structure
+      // Response may have different formats:
+      // 1. Array of interface objects
+      // 2. Object with interface key containing array
+      // 3. gNMI notification format with updates
+
+      let interfaceData = data;
+
+      // Navigate through different possible response structures
+      if (data?.notification?.[0]?.update) {
+        // gNMI notification format
+        interfaceData = data.notification[0].update;
+      } else if (data?.interface) {
+        interfaceData = data.interface;
+      } else if (Array.isArray(data)) {
+        interfaceData = data;
+      }
 
       if (!interfaceData) {
         console.warn('[NetworkService] No interface data in gNMI response');
@@ -140,14 +156,55 @@ export class NetworkService {
       const interfaceList = Array.isArray(interfaceData) ? interfaceData : [interfaceData];
 
       for (const iface of interfaceList) {
-        const rawStatus = iface.operationalStatus || iface.status || iface['oper-status'] || 'unknown';
+        // Handle both gNMI update format and direct interface format
+        const ifaceData = iface?.val || iface;
+
+        if (!ifaceData) continue;
+
+        // SR Linux interface properties
+        const rawName = ifaceData.name || ifaceData['interface-name'] || '';
+        const name = mapToCliInterfaceName(rawName);
+
+        // Extract IP from subinterface data
+        let ip = 'unassigned';
+        const subinterfaces = ifaceData.subinterface || ifaceData['sub-interface'];
+        if (subinterfaces) {
+          const subifList = Array.isArray(subinterfaces) ? subinterfaces : [subinterfaces];
+          for (const subif of subifList) {
+            const ipv4Addresses = subif?.ipv4?.address || subif?.['ipv4-address'];
+            if (ipv4Addresses) {
+              const addrList = Array.isArray(ipv4Addresses) ? ipv4Addresses : [ipv4Addresses];
+              for (const addr of addrList) {
+                if (addr?.['ipv4-address'] || addr?.address) {
+                  const ipAddress = addr['ipv4-address'] || addr.address;
+                  const prefixLen = addr?.['prefix-length'] || addr?.prefix;
+                  if (ipAddress) {
+                    ip = prefixLen ? `${ipAddress}/${prefixLen}` : ipAddress;
+                    break;
+                  }
+                }
+              }
+              if (ip !== 'unassigned') break;
+            }
+          }
+        }
+
+        // SR Linux operational status values
+        const rawStatus = ifaceData.oper_state ||
+                         ifaceData['oper-state'] ||
+                         ifaceData.admin_state ||
+                         ifaceData['admin-state'] ||
+                         'unknown';
+
         interfaces.push({
-          name: iface.name || iface['interface-name'] || '',
-          ip: iface.address || iface.ip || 'unassigned',
+          name,
+          ip,
           status: this.normalizeInterfaceStatus(String(rawStatus)),
-          description: iface.description || '',
-          enabled: iface.enabled ?? true,
-          mtu: iface.mtu || 1500,
+          description: ifaceData.description || '',
+          enabled: ifaceData.admin_state === 'enable' ||
+                   ifaceData['admin-state'] === 'enable' ||
+                   ifaceData.enabled !== false,
+          mtu: ifaceData.mtu || ifaceData['mtu'] || 1500,
         });
       }
     } catch (error) {
@@ -361,12 +418,25 @@ export class NetworkService {
 
   /**
    * Parse gNMI route data to Route[]
+   * Handles SR Linux response format from srl_nokia-network-instance YANG model
    */
   private parseGnmiRouteData(data: any): Route[] {
     const routes: Route[] = [];
 
     try {
-      const routeData = data?.route || data?.['route-table'];
+      // SR Linux gNMI route response structure
+      let routeData = data;
+
+      // Navigate through different possible response structures
+      if (data?.notification?.[0]?.update) {
+        routeData = data.notification[0].update;
+      } else if (data?.['route-entry']) {
+        routeData = data['route-entry'];
+      } else if (data?.route) {
+        routeData = data.route;
+      } else if (Array.isArray(data)) {
+        routeData = data;
+      }
 
       if (!routeData) {
         console.warn('[NetworkService] No route data in gNMI response');
@@ -376,13 +446,50 @@ export class NetworkService {
       const routeList = Array.isArray(routeData) ? routeData : [routeData];
 
       for (const route of routeList) {
+        // Handle both gNMI update format and direct route format
+        const routeDataEntry = route?.val || route;
+
+        if (!routeDataEntry) continue;
+
+        // SR Linux route properties
+        const destination = routeDataEntry.prefix ||
+                           routeDataEntry.destination ||
+                           routeDataEntry['dest-prefix'] ||
+                           '0.0.0.0/0';
+
+        const nextHop = routeDataEntry['next-hop']?.[0]?.['next-hop-address'] ||
+                       routeDataEntry['next-hop-address'] ||
+                       routeDataEntry.nextHop ||
+                       routeDataEntry['next-hop'] ||
+                       '';
+
+        // Determine protocol from SR Linux route attributes
+        let protocol = routeDataEntry.protocol ||
+                      routeDataEntry['route-protocol'] ||
+                      routeDataEntry['route-origin'] ||
+                      'unknown';
+
+        // Map SR Linux protocol values to standard names
+        if (protocol === 'static' || protocol === 'STATIC') protocol = 'static';
+        if (protocol === 'bgp' || protocol === 'BGP') protocol = 'bgp';
+        if (protocol === 'ospf' || protocol === 'OSPF') protocol = 'ospf';
+        if (protocol === 'connected' || protocol === 'CONNECTED') protocol = 'connected';
+        if (protocol === 'local' || protocol === 'LOCAL') protocol = 'local';
+
         routes.push({
-          destination: route.destination || route['dest-prefix'] || '0.0.0.0/0',
-          nextHop: route.nextHop || route['next-hop'] || '',
-          interface: route.outgoingInterface || route['out-interface'] || '',
-          protocol: route.protocol || route['route-protocol'] || 'unknown',
-          metric: route.metric || 0,
-          adminDistance: route.adminDistance || route['admin-distance'] || 0,
+          destination,
+          nextHop,
+          interface: routeDataEntry['outgoing-interface'] ||
+                    routeDataEntry.interface ||
+                    routeDataEntry['if-name'] ||
+                    '',
+          protocol,
+          metric: routeDataEntry.metric ||
+                 routeDataEntry['route-preference'] ||
+                 0,
+          adminDistance: routeDataEntry.adminDistance ||
+                        routeDataEntry['admin-distance'] ||
+                        0,
         });
       }
     } catch (error) {

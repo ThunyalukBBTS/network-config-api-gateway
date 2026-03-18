@@ -1,13 +1,85 @@
 /**
- * gNMI Client for communicating with Cisco IOS XE devices
- * Uses gNMI protocol for configuration and telemetry
+ * gNMI Client for communicating with Nokia SR Linux devices
+ * Uses gnmic CLI tool for configuration and telemetry
  *
- * This is a TypeScript implementation that uses gnmi CLI or gRPC
- * For production, consider using a proper gNMI gRPC library
+ * SR Linux gNMI paths are based on srl_nokia YANG models
  */
 
 import { spawn } from 'child_process';
-import type { GNMIConfig, GNMISetRequest, GNMIGetRequest, GNMISubscription, GNMIPath } from '../types/index.js';
+import type { GNMIConfig, GNMIPath } from '../types/index.js';
+
+/**
+ * SR Linux gNMI path constants
+ * Based on srl_nokia YANG models
+ */
+export const SRL_GNMI_PATHS = {
+  // Interface paths (srl_nokia-interfaces)
+  INTERFACES: '/interface',
+  INTERFACE: (name: string) => `/interface[name=${name}]`,
+  INTERFACE_SUBIF: (name: string, index = 0) => `/interface[name=${name}]/subinterface[index=${index}]`,
+  INTERFACE_IP: (name: string, ip: string) => `/interface[name=${name}]/subinterface[index=0]/ipv4/address[ipv4-address=${ip}]`,
+  INTERFACE_ADMIN_STATE: (name: string) => `/interface[name=${name}]/admin-state`,
+  INTERFACE_DESCRIPTION: (name: string) => `/interface[name=${name}]/description`,
+  INTERFACE_MTU: (name: string) => `/interface[name=${name}]/mtu`,
+
+  // Network instance paths (srl_nokia-network-instance)
+  NETWORK_INSTANCE: (name = 'default') => `/network-instance[name=${name}]`,
+  NETWORK_INSTANCE_ROUTE_TABLE: (name = 'default') => `/network-instance[name=${name}]/route-table/ipv4-unicast`,
+  NETWORK_INSTANCE_STATIC_ROUTE: (ni: string, prefix: string) =>
+    `/network-instance[name=${ni}]/static-route/ipv4[route-preference=1][prefix=${prefix}]`,
+  NETWORK_INSTANCE_NEXT_HOP: (ni: string, prefix: string, nhIndex: string) =>
+    `/network-instance[name=${ni}]/static-route/ipv4[route-preference=1][prefix=${prefix}]/next-hop[index=${nhIndex}]`,
+
+  // BGP paths (srl_nokia-bgp)
+  BGP: (ni = 'default') => `/network-instance[name=${ni}]/protocols/bgp`,
+  BGP_NEIGHBOR: (ni: string, peerIp: string) =>
+    `/network-instance[name=${ni}]/protocols/bgp/neighbor[peer-address=${peerIp}]`,
+
+  // OSPF paths (srl_nokia-ospf)
+  OSPF: (ni = 'default') => `/network-instance[name=${ni}]/protocols/ospf`,
+
+  // System paths
+  SYSTEM_HOSTNAME: '/system/hostname',
+  SYSTEM_DNS: '/system/dns',
+
+  // Common SR Linux interface names
+  INTERFACE_NAMES: [
+    'mgmt0',
+    'ethernet-1/1',
+    'ethernet-1/2',
+    'ethernet-1/3',
+    'ethernet-1/4',
+  ],
+} as const;
+
+/**
+ * Map CLI interface names (e1-1) to SR Linux interface names (ethernet-1/1)
+ */
+export function mapInterfaceName(name: string): string {
+  // Map e1-1 -> ethernet-1/1, e1-2 -> ethernet-1/2, etc.
+  const match = name.match(/^e(\d+)-(\d+)$/);
+  if (match) {
+    const card = match[1];
+    const port = match[2];
+    return `ethernet-${card}/${port}`;
+  }
+  // Already in SR Linux format or mgmt0
+  return name;
+}
+
+/**
+ * Reverse map SR Linux interface names to CLI names
+ */
+export function mapToCliInterfaceName(name: string): string {
+  // Map ethernet-1/1 -> e1-1, ethernet-1/2 -> e1-2, etc.
+  const match = name.match(/^ethernet-(\d+)\/(\d+)$/);
+  if (match) {
+    const card = match[1];
+    const port = match[2];
+    return `e${card}-${port}`;
+  }
+  return name;
+}
 
 export interface GNMIRequest {
   path: string[];
@@ -67,7 +139,6 @@ function pathToString(path: string[]): string {
  * gNMI Client class
  */
 export class GNMIClient {
-  private connected = false;
   private timeout: number;
 
   constructor(private config: GNMIConfig) {
@@ -78,9 +149,7 @@ export class GNMIClient {
    * Connect to gNMI device
    */
   async connect(): Promise<GNMIResponse> {
-    // For gNMI, connection happens per request via gRPC/gnmi CLI
-    // This is a placeholder for connection validation
-    this.connected = true;
+    
     console.log(`[gNMI] Connected to ${this.config.host}:${this.config.port}`);
     return { success: true, data: { message: 'Connected' } };
   }
@@ -89,17 +158,23 @@ export class GNMIClient {
    * Disconnect from gNMI device
    */
   async disconnect(): Promise<GNMIResponse> {
-    this.connected = false;
+    
     console.log('[gNMI] Disconnected');
     return { success: true, data: { message: 'Disconnected' } };
   }
 
   /**
-   * Execute gnmi CLI command (helper for systems with gnmi CLI installed)
+   * Execute gnmic CLI command
+   * Uses correct gnmic CLI syntax (not gnmi)
+   *
+   * gnmic command reference:
+   * - gnmic get -a <host>:<port> -u <user> -p <pass> --skip-verify --path <xpath>
+   * - gnmic set -a <host>:<port> -u <user> -p <pass> --skip-verify --update <path>:<json_value>
+   * - gnmic capabilities -a <host>:<port> -u <user> -p <pass> --skip-verify
    */
-  private async execGnmi(args: string[]): Promise<{ stdout: string; stderr: string }> {
+  private async execGnmic(args: string[]): Promise<{ stdout: string; stderr: string }> {
     return new Promise((resolve, reject) => {
-      const proc = spawn('gnmi', args, {
+      const proc = spawn('gnmic', args, {
         stdio: ['pipe', 'pipe', 'pipe'],
         timeout: this.timeout,
       });
@@ -119,13 +194,13 @@ export class GNMIClient {
         if (code === 0 || stdout.length > 0) {
           resolve({ stdout, stderr });
         } else {
-          reject(new Error(`gnmi exited with code ${code}: ${stderr}`));
+          reject(new Error(`gnmic exited with code ${code}: ${stderr}`));
         }
       });
 
-      proc.on('error', () => {
-        // gnmi CLI not available, return mock response
-        console.warn('[gNMI] gnmi CLI not available, using mock mode');
+      proc.on('error', (err) => {
+        // gnmic CLI not available, return mock response
+        console.warn('[gNMI] gnmic CLI not available:', err.message, '- using mock mode');
         resolve({ stdout: '{}', stderr: 'CLI not available' });
       });
     });
@@ -133,23 +208,26 @@ export class GNMIClient {
 
   /**
    * Get configuration from device
+   *
+   * gnmic get command:
+   * gnmic get -a <host>:<port> -u <user> -p <pass> --skip-verify --path <xpath>
    */
   async get(request: GNMIRequest): Promise<GNMIResponse> {
     try {
       console.log(`[gNMI] GET ${request.path.join('/')}`);
 
-      // Build gnmi get command
+      // Build gnmic get command with correct flags
       const path = pathToString(request.path);
       const args = [
         'get',
-        '-addr', `${this.config.host}:${this.config.port}`,
-        '-insecure',
-        '-xpath', path,
-        '-username', this.config.username,
-        '-password', this.config.password,
+        '-a', `${this.config.host}:${this.config.port}`,
+        '-u', this.config.username,
+        '-p', this.config.password,
+        '--skip-verify',
+        '--path', path,
       ];
 
-      const { stdout } = await this.execGnmi(args);
+      const { stdout } = await this.execGnmic(args);
 
       // Parse JSON response
       let data;
@@ -173,6 +251,10 @@ export class GNMIClient {
 
   /**
    * Set configuration on device
+   *
+   * gnmic set command:
+   * gnmic set -a <host>:<port> -u <user> -p <pass> --skip-verify --update <path>:<json_value>
+   * gnmic set -a <host>:<port> -u <user> -p <pass> --skip-verify --delete <path>
    */
   async set(request: GNMIRequest): Promise<GNMIResponse> {
     try {
@@ -182,18 +264,23 @@ export class GNMIClient {
       const path = pathToString(request.path);
       const valueJson = JSON.stringify(request.value || {});
 
+      // Build gnmic set command with correct flags
       const args = [
         'set',
-        '-addr', `${this.config.host}:${this.config.port}`,
-        '-insecure',
-        '-xpath', path,
-        '-value', valueJson,
-        '-op', operation,
-        '-username', this.config.username,
-        '-password', this.config.password,
+        '-a', `${this.config.host}:${this.config.port}`,
+        '-u', this.config.username,
+        '-p', this.config.password,
+        '--skip-verify',
       ];
 
-      const { stdout } = await this.execGnmi(args);
+      if (operation === 'delete') {
+        args.push('--delete', path);
+      } else {
+        // For update/replace, use --update flag with path:value format
+        args.push('--update', `${path}:${valueJson}`);
+      }
+
+      const { stdout } = await this.execGnmic(args);
 
       let data;
       try {
@@ -232,69 +319,185 @@ export class GNMIClient {
   }
 
   /**
-   * Get interface configuration
+   * Get interface configuration using SR Linux paths
    */
   async getInterface(interfaceName: string): Promise<GNMIResponse> {
+    // Map CLI interface name to SR Linux format
+    const srlInterfaceName = mapInterfaceName(interfaceName);
+    const path = SRL_GNMI_PATHS.INTERFACE(srlInterfaceName);
+
     return this.get({
-      path: ['interfaces', 'interface', `[name=${interfaceName}]`],
+      path: [path],
     });
   }
 
   /**
-   * Get all interfaces
+   * Get all interfaces using SR Linux paths
    */
   async getAllInterfaces(): Promise<GNMIResponse> {
     return this.get({
-      path: ['interfaces', 'interface'],
+      path: [SRL_GNMI_PATHS.INTERFACES],
     });
   }
 
   /**
-   * Set interface configuration
+   * Set interface configuration using SR Linux paths
    */
   async setInterface(interfaceName: string, config: Record<string, unknown>): Promise<GNMIResponse> {
-    return this.set({
-      path: ['interfaces', 'interface', `[name=${interfaceName}]`],
-      value: config,
-      operation: 'update',
+    // Map CLI interface name to SR Linux format
+    const srlInterfaceName = mapInterfaceName(interfaceName);
+
+    const updates: Array<{ path: string; value: unknown }> = [];
+
+    // Build SR Linux specific updates
+    if (config.ip) {
+      // Parse IP address (e.g., "192.168.1.1/24")
+      const ipMatch = String(config.ip).match(/^([\d.]+)\/(\d+)$/);
+      if (ipMatch) {
+        const [, ip, prefix] = ipMatch;
+        const ipPath = `/interface[name=${srlInterfaceName}]/subinterface[index=0]/ipv4/address[ipv4-address=${ip}]`;
+        updates.push({
+          path: ipPath,
+          value: {
+            'ipv4-address': ip,
+            'prefix-length': parseInt(prefix, 10),
+          },
+        });
+      }
+    }
+
+    if (config.description !== undefined) {
+      updates.push({
+        path: `/interface[name=${srlInterfaceName}]/description`,
+        value: String(config.description),
+      });
+    }
+
+    if (config.enabled !== undefined) {
+      updates.push({
+        path: `/interface[name=${srlInterfaceName}]/admin-state`,
+        value: config.enabled ? 'enable' : 'disable',
+      });
+    }
+
+    if (config.mtu !== undefined) {
+      updates.push({
+        path: `/interface[name=${srlInterfaceName}]/mtu`,
+        value: Number(config.mtu),
+      });
+    }
+
+    // Execute updates sequentially
+    let lastResponse: GNMIResponse = { success: true };
+    for (const update of updates) {
+      lastResponse = await this.set({
+        path: [update.path],
+        value: update.value,
+        operation: 'update',
+      });
+      if (!lastResponse.success) {
+        return lastResponse;
+      }
+    }
+
+    return lastResponse;
+  }
+
+  /**
+   * Get routing configuration using SR Linux paths
+   */
+  async getRouting(networkInstance = 'default'): Promise<GNMIResponse> {
+    return this.get({
+      path: [SRL_GNMI_PATHS.NETWORK_INSTANCE_ROUTE_TABLE(networkInstance)],
     });
   }
 
   /**
-   * Get routing configuration
-   */
-  async getRouting(protocol?: string): Promise<GNMIResponse> {
-    const path = protocol
-      ? ['protocols', 'protocol', `[bgp]`, 'routes']
-      : ['routes'];
-
-    return this.get({ path });
-  }
-
-  /**
-   * Set routing configuration
+   * Set routing configuration using SR Linux paths
    */
   async setRouting(protocol: string, config: Record<string, unknown>): Promise<GNMIResponse> {
-    return this.set({
-      path: ['protocols', 'protocol', `[name=${protocol}]`],
-      value: config,
-      operation: 'update',
-    });
+    const ni = config.networkInstance as string || 'default';
+
+    switch (protocol) {
+      case 'static': {
+        const destination = config.destination as string;
+        const nextHop = config.nextHop as string;
+        const metric = config.metric as number | undefined;
+
+        if (!destination) {
+          return { success: false, error: 'Destination is required for static routes' };
+        }
+
+        // Build SR Linux static route path
+        const routePath = `/network-instance[name=${ni}]/static-route/ipv4[route-preference=1][prefix=${destination}]`;
+
+        const value: Record<string, unknown> = {
+          prefix: destination,
+          'route-preference': 1,
+        };
+
+        if (nextHop) {
+          value['next-hop'] = [{
+            index: 1,
+            'next-hop-address': nextHop,
+            metric: metric ?? 1,
+          }];
+        }
+
+        return this.set({
+          path: [routePath],
+          value,
+          operation: 'update',
+        });
+      }
+
+      case 'ospf':
+      case 'bgp':
+        // Return not implemented for dynamic protocols
+        return {
+          success: false,
+          error: `${protocol} configuration via gNMI not yet implemented`,
+        };
+
+      default:
+        return {
+          success: false,
+          error: `Unknown protocol: ${protocol}`,
+        };
+    }
   }
 
   /**
-   * Delete routing configuration
+   * Delete routing configuration using SR Linux paths
    */
   async deleteRouting(protocol: string, config: Record<string, unknown>): Promise<GNMIResponse> {
-    return this.set({
-      path: ['protocols', 'protocol', `[name=${protocol}]`],
-      value: config,
-      operation: 'delete',
-    });
+    const ni = config.networkInstance as string || 'default';
+
+    if (protocol === 'static') {
+      const destination = config.destination as string;
+      if (!destination) {
+        return { success: false, error: 'Destination is required for static route deletion' };
+      }
+
+      const routePath = `/network-instance[name=${ni}]/static-route/ipv4[route-preference=1][prefix=${destination}]`;
+
+      return this.set({
+        path: [routePath],
+        operation: 'delete',
+      });
+    }
+
+    return {
+      success: false,
+      error: `${protocol} deletion via gNMI not yet implemented`,
+    };
   }
 
   /**
    * Get capabilities (supported models/features)
+   *
+   * gnmic capabilities command:
+   * gnmic capabilities -a <host>:<port> -u <user> -p <pass> --skip-verify
    */
   async capabilities(): Promise<GNMIResponse> {
     console.log('[gNMI] CAPABILITIES');
@@ -302,13 +505,13 @@ export class GNMIClient {
     try {
       const args = [
         'capabilities',
-        '-addr', `${this.config.host}:${this.config.port}`,
-        '-insecure',
-        '-username', this.config.username,
-        '-password', this.config.password,
+        '-a', `${this.config.host}:${this.config.port}`,
+        '-u', this.config.username,
+        '-p', this.config.password,
+        '--skip-verify',
       ];
 
-      const { stdout } = await this.execGnmi(args);
+      const { stdout } = await this.execGnmic(args);
 
       let data;
       try {

@@ -54,10 +54,10 @@ function loadConfig(): Config {
     // Protocol selection - default to NETCONF for backward compatibility
     preferredProtocol: (process.env.PREFERRED_PROTOCOL === 'gnmi' ? 'gnmi' : 'netconf'),
 
-    gnmiHost: process.env.GNMI_HOST || '192.168.1.1',
-    gnmiPort: parseInt(process.env.GNMI_PORT || '9339', 10),
+    gnmiHost: process.env.GNMI_HOST || '172.20.20.3',
+    gnmiPort: parseInt(process.env.GNMI_PORT || '57400', 10),
     gnmiUsername: process.env.GNMI_USERNAME || 'admin',
-    gnmiPassword: process.env.GNMI_PASSWORD || 'admin',
+    gnmiPassword: process.env.GNMI_PASSWORD || 'NokiaSrl1!',
     gnmiInsecure: process.env.GNMI_INSECURE === 'true',
     gnmiEnabled: process.env.GNMI_ENABLED !== 'false', // enabled by default
     gnmiTimeout: parseInt(process.env.GNMI_TIMEOUT || '30000', 10),
