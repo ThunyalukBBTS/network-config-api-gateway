@@ -205,6 +205,11 @@ src/
 └── index.ts               # Application entry point
 ```
 
+## Check gNMI running
+```
+gnmic -a 172.20.20.3:57400 -u admin -p NokiaSrl1! --skip-verify capabilities
+```
+
 ## YANG Models
 
 YANG models for Cisco IOS XE 16.9.3 are available at:
