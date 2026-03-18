@@ -3,11 +3,14 @@
  * GET /api/health - API health check
  * GET /api/health/router - Router connectivity check (ping)
  * GET /api/health/router/netconf - NETCONF port test
+ * GET /api/health/router/gnmi - gNMI port test
  */
 
 import { Elysia } from 'elysia';
 import { config } from '../config/index.js';
 import { getDb } from '../db/index.js';
+import { NETCONFClient } from '../services/netconf-client.js';
+import { GNMIClient } from '../services/gnmi-client.js';
 
 export const healthRoutes = new Elysia({ prefix: '/api/health' })
 
@@ -229,6 +232,118 @@ export const healthRoutes = new Elysia({ prefix: '/api/health' })
           },
           503: {
             description: 'NETCONF port is not reachable',
+          },
+        },
+      },
+    }
+  )
+
+  /**
+   * GET /api/health/router/gnmi
+   * Test gNMI port connectivity and capabilities
+   */
+  .get(
+    '/router/gnmi',
+    async () => {
+      const routerIp = config.gnmiHost;
+      const port = config.gnmiPort;
+
+      // In mock mode, return mock response
+      if (config.mockMode) {
+        return {
+          status: 'ok',
+          timestamp: new Date().toISOString(),
+          service: {
+            name: 'gnmi',
+            host: routerIp,
+            port,
+            reachable: true,
+            mode: 'mock',
+            message: 'Mock mode - gNMI connection simulated',
+          },
+        };
+      }
+
+      // First, test TCP connection to gNMI port
+      const { exec } = await import('child_process');
+      const util = await import('util');
+      const execPromise = util.promisify(exec);
+
+      try {
+        // Test TCP port first
+        const { stdout: ncOutput } = await execPromise(
+          `nc -zv -w 3 ${routerIp} ${port} 2>&1`,
+          { timeout: 5000 }
+        );
+
+        const portReachable = ncOutput.includes('succeeded') || ncOutput.includes('open');
+
+        if (!portReachable) {
+          return {
+            status: 'unhealthy',
+            timestamp: new Date().toISOString(),
+            service: {
+              name: 'gnmi',
+              host: routerIp,
+              port,
+              reachable: false,
+              message: 'gNMI port is not reachable',
+            },
+          };
+        }
+
+        // Port is open, try gNMI capabilities check
+        const gnmiClient = new GNMIClient({
+          host: config.gnmiHost,
+          port: config.gnmiPort,
+          username: config.gnmiUsername,
+          password: config.gnmiPassword,
+          insecure: config.gnmiInsecure,
+          timeout: 5000,
+        });
+
+        const capsResponse = await gnmiClient.capabilities();
+
+        return {
+          status: capsResponse.success ? 'ok' : 'degraded',
+          timestamp: new Date().toISOString(),
+          service: {
+            name: 'gnmi',
+            host: routerIp,
+            port,
+            reachable: true,
+            capabilities: capsResponse.success,
+            message: capsResponse.success
+              ? 'gNMI service is healthy'
+              : 'gNMI port reachable but capabilities check failed',
+            error: capsResponse.error,
+          },
+        };
+      } catch (error: any) {
+        return {
+          status: 'unhealthy',
+          timestamp: new Date().toISOString(),
+          service: {
+            name: 'gnmi',
+            host: routerIp,
+            port,
+            reachable: false,
+            message: 'gNMI port connection failed',
+            error: error.message,
+          },
+        };
+      }
+    },
+    {
+      detail: {
+        description: 'Test gNMI port (9339) connectivity and capabilities',
+        tags: ['Health'],
+        responses: {
+          200: {
+            description: 'gNMI service status',
+          },
+          503: {
+            description: 'gNMI service is not reachable',
           },
         },
       },
