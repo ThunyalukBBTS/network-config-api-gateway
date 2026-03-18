@@ -57,6 +57,6 @@ run = "cd backend && biome format --write src/"
 description = "Clean build artifacts"
 run = "cd backend && rm -rf dist/"
 
-[task.mock-frr]
+[tasks.mock-frr]
 description = "create frr container and create int yang model for test"
 run = "cd docker && docker compose -f docker-compose_frr.yml up -d --build && python ./testfrr/create_int.py && python ./testfrr/testNC.py"
