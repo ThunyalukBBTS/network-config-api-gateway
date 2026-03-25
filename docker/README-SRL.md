@@ -46,8 +46,42 @@ gnmic -a localhost:57400 -u admin -p Admin123 --insecure subscribe \
 
 # container lab gnmi connection testing
 gnmic -a 172.20.20.3:57400 -u admin -p NokiaSrl1! --skip-verify capabilities
+
+# get interface to json file
+gnmic -a 172.20.20.4:57400 -u admin -p NokiaSrl1! --skip-verify get --path '/interface[name=ethernet-1/1]' --encoding json_ietf > test.json 
 ```
 
+### Command to set ip
+```bash
+set / network-instance default type default admin-state enable
+
+# Bind the subinterfaces to the network-instance
+set / network-instance default interface ethernet-1/1.0
+set / network-instance default interface ethernet-1/2.0
+
+# Apply the IP addresses
+set / interface ethernet-1/1 subinterface 0 ipv4 address 192.168.1.1/24
+set / interface ethernet-1/2 subinterface 0 ipv4 address 192.168.2.1/24
+
+commit stay
+```
+### Command to get interfaces ip address
+```bash
+gnmic -a 172.20.20.4:57400 -u admin -p NokiaSrl1! --skip-verify get \
+--path '/interface[name=ethernet-1/1]/subinterface[index=0]/ipv4/address' \
+--path '/interface[name=ethernet-1/2]/subinterface[index=0]/ipv4/address' --encoding json_ietf
+```
+
+### Command to ping (nokia sr cli)
+```bash
+ping 192.168.1.2 network-instance default
+```
+### Transaction
+```bash
+enter candidate
+set / interface ethernet-1/1 subinterface 0 ipv4 address 192.168.1.1/24
+commit validate
+```
 ### NETCONF (ncclient)
 
 ```python
