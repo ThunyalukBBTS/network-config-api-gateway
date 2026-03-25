@@ -67,11 +67,11 @@ cp ./backend/.env.example ./backend/.env
 # Edit .env with your settings
 ```
 
-7. Start srl-linux for test
+7. Start srl-linux (containerlab) for test
 ```bash
-mise srl-up
+mise clab-up
 # or
-docker compose -f ./docker/docker-compose-srl.yml up -d
+docker compose -f ./containerlab/containerlab deploy -t project.clab.yml
 ```
 
 8. Start the server:

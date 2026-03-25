@@ -5,41 +5,15 @@
  */
 
 import { Elysia, t } from 'elysia';
-import { jwtVerify } from 'jose';
-import { config } from '../config/index.js';
-import { sha256 } from '../utils/crypto.js';
 import { networkService } from '../services/network-service.js';
 import { db } from '../db/index.js';
+import { verifyTokenAndGetUser, isSessionValid  } from '../utils/verify.js';
 import type {
   GetInterfacesResponse,
   ConfigureInterfaceRequest,
   ConfigureInterfaceResponse,
-  JWTPayload,
 } from '../types/index.js';
 
-// Helper function to verify JWT and get user
-async function verifyTokenAndGetUser(token: string): Promise<JWTPayload | null> {
-  try {
-    const { payload } = await jwtVerify(
-      token,
-      Buffer.from(config.jwtSecret)
-    );
-    return {
-      userId: payload.userId as string,
-      username: payload.username as string,
-      role: payload.role as 'admin',
-    };
-  } catch {
-    return null;
-  }
-}
-
-// Check if session is valid
-async function isSessionValid(token: string): Promise<boolean> {
-  const tokenHash = sha256(token);
-  const session = await db.findSession(tokenHash);
-  return session && session.length > 0;
-}
 
 export const interfaceRoutes = new Elysia({ prefix: "/api/interfaces" })
 
