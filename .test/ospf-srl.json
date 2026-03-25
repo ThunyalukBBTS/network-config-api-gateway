@@ -1,0 +1,17 @@
+{
+  "admin-state": "enable",
+  "version": "ospf-v2",
+  "router-id": "1.1.1.1",
+  "area": [
+    {
+      "area-id": "0.0.0.0",
+      "interface": [
+        {
+          "interface-name": "ethernet-1/1.0",
+          "admin-state": "enable",
+          "interface-type": "point-to-point"
+        }
+      ]
+    }
+  ]
+}
