@@ -127,32 +127,98 @@ export class NetworkService {
    * Handles SR Linux response format from srl_nokia-interfaces YANG model
    */
   private parseGnmiInterfaceData(data: any): InterfaceConfig[] {
+    console.log('[NetworkService] parseGnmiInterfaceData called');
     const interfaces: InterfaceConfig[] = [];
 
     try {
-      // SR Linux gNMI response structure
-      // Response may have different formats:
-      // 1. gNMI get response with updates: [{ updates: [{ values: {...} }] }]
-      // 2. Array of interface objects
-      // 3. Object with interface key containing array
-      // 4. gNMI notification format with updates
-
-      let interfaceData = data;
+      // SR Linux gNMI response structure from gnmic get --type state --encoding json_ietf:
+      // [{
+      //   "updates": [{
+      //     "Path": "",
+      //     "values": {
+      //       "": {
+      //         "srl_nokia-interfaces:interface": [ { iface1 }, { iface2 }, ... ]
+      //       }
+      //     }
+      //   }]
+      // }]
 
       // Handle gNMI get response format with updates array
       if (Array.isArray(data) && data.length > 0 && data[0]?.updates) {
-        // Extract values from gNMI get response format:
-        // [{ updates: [{ values: { "srl_nokia-interfaces:interface": {...} } }] }]
-        const values = data[0].updates?.[0]?.values;
-        if (values) {
-          // The interface data may be under a namespace key
-          const namespaceKey = 'srl_nokia-interfaces:interface';
-          interfaceData = values[namespaceKey] || values;
+        console.log('[NetworkService] Handling gNMI get response with updates');
+
+        for (const item of data) {
+          if (!item?.updates) continue;
+
+          for (const update of item.updates) {
+            const values = update.values;
+            if (!values) continue;
+
+            // Navigate through possible nested structures
+            let interfaceArray: any[] | null = null;
+
+            // Case 1: values[""]["srl_nokia-interfaces:interface"] - array of interfaces
+            if (values[""]?.["srl_nokia-interfaces:interface"]) {
+              interfaceArray = values[""]["srl_nokia-interfaces:interface"];
+            }
+            // Case 2: values["srl_nokia-interfaces:interface"] - direct namespace access
+            else if (values["srl_nokia-interfaces:interface"]) {
+              interfaceArray = values["srl_nokia-interfaces:interface"];
+            }
+            // Case 3: values is the interface array
+            else if (Array.isArray(values)) {
+              interfaceArray = values;
+            }
+
+            if (!interfaceArray) {
+              console.warn('[NetworkService] Could not find interface array in values');
+              continue;
+            }
+
+            console.log('[NetworkService] Found', interfaceArray.length, 'interfaces');
+
+            // Parse each interface in the array
+            for (const ifaceData of interfaceArray) {
+              const parsed = this.parseSingleGnmiInterface(ifaceData, null);
+              if (parsed) {
+                interfaces.push(parsed);
+              }
+            }
+          }
         }
+        return interfaces;
       }
-      // Navigate through different possible response structures
-      else if (data?.notification?.[0]?.update) {
-        // gNMI notification format
+
+      // Handle single interface response format (from getInterface by name)
+      // Same structure but with a single interface
+      if (Array.isArray(data) && data.length > 0 && data[0]?.updates?.[0]?.values) {
+        const values = data[0].updates[0].values;
+
+        let ifaceData: any = null;
+
+        // Extract single interface data
+        if (values[""]?.["srl_nokia-interfaces:interface"]) {
+          const arr = values[""]["srl_nokia-interfaces:interface"];
+          ifaceData = Array.isArray(arr) ? arr[0] : arr;
+        } else if (values["srl_nokia-interfaces:interface"]) {
+          const arr = values["srl_nokia-interfaces:interface"];
+          ifaceData = Array.isArray(arr) ? arr[0] : arr;
+        } else if (values[""]) {
+          ifaceData = values[""];
+        }
+
+        if (ifaceData) {
+          const parsed = this.parseSingleGnmiInterface(ifaceData, null);
+          if (parsed) {
+            interfaces.push(parsed);
+          }
+        }
+        return interfaces;
+      }
+
+      // Fallback: Try to handle other response formats
+      let interfaceData = data;
+      if (data?.notification?.[0]?.update) {
         interfaceData = data.notification[0].update;
       } else if (data?.interface) {
         interfaceData = data.interface;
@@ -166,72 +232,79 @@ export class NetworkService {
       }
 
       const interfaceList = Array.isArray(interfaceData) ? interfaceData : [interfaceData];
-
       for (const iface of interfaceList) {
-        // Handle both gNMI update format and direct interface format
-        const ifaceData = iface?.val || iface;
-
-        if (!ifaceData) continue;
-
-        // SR Linux interface properties
-        const rawName = ifaceData.name || ifaceData['interface-name'] || '';
-        const name = mapToCliInterfaceName(rawName);
-
-        // Extract IP from subinterface data
-        // Handle both formats: ip-prefix (gNMI get) and ipv4-address/prefix-length (config)
-        let ip = 'unassigned';
-        const subinterfaces = ifaceData.subinterface || ifaceData['sub-interface'];
-        if (subinterfaces) {
-          const subifList = Array.isArray(subinterfaces) ? subinterfaces : [subinterfaces];
-          for (const subif of subifList) {
-            // Check for ip-prefix format from gNMI get response
-            const ipv4Addresses = subif?.ipv4?.address || subif?.['ipv4-address'];
-            if (ipv4Addresses) {
-              const addrList = Array.isArray(ipv4Addresses) ? ipv4Addresses : [ipv4Addresses];
-              for (const addr of addrList) {
-                // Check for ip-prefix format (gNMI get response)
-                if (addr?.['ip-prefix']) {
-                  ip = addr['ip-prefix'];
-                  break;
-                }
-                // Check for ipv4-address/prefix-length format (config response)
-                if (addr?.['ipv4-address'] || addr?.address) {
-                  const ipAddress = addr['ipv4-address'] || addr.address;
-                  const prefixLen = addr?.['prefix-length'] || addr?.prefix;
-                  if (ipAddress) {
-                    ip = prefixLen ? `${ipAddress}/${prefixLen}` : ipAddress;
-                    break;
-                  }
-                }
-              }
-              if (ip !== 'unassigned') break;
-            }
-          }
+        const parsed = this.parseSingleGnmiInterface(iface, null);
+        if (parsed) {
+          interfaces.push(parsed);
         }
-
-        // SR Linux operational status values
-        const rawStatus = ifaceData.oper_state ||
-                         ifaceData['oper-state'] ||
-                         ifaceData.admin_state ||
-                         ifaceData['admin-state'] ||
-                         'unknown';
-
-        interfaces.push({
-          name,
-          ip,
-          status: this.normalizeInterfaceStatus(String(rawStatus)),
-          description: ifaceData.description || '',
-          enabled: ifaceData.admin_state === 'enable' ||
-                   ifaceData['admin-state'] === 'enable' ||
-                   ifaceData.enabled !== false,
-          mtu: ifaceData.mtu || ifaceData['mtu'] || 1500,
-        });
       }
     } catch (error) {
       console.error('[NetworkService] Error parsing gNMI interface data:', error);
     }
 
     return interfaces;
+  }
+
+  /**
+   * Parse a single gNMI interface data object
+   */
+  private parseSingleGnmiInterface(ifaceData: any, pathName: string | null): InterfaceConfig | null {
+    if (!ifaceData) return null;
+
+    // SR Linux interface properties
+    // Try to get name from data first, then from path context
+    const rawName = ifaceData.name || ifaceData['interface-name'] || pathName || '';
+    const name = mapToCliInterfaceName(rawName);
+
+    // Extract IP from subinterface data
+    // Handle both formats: ip-prefix (gNMI get) and ipv4-address/prefix-length (config)
+    let ip = 'unassigned';
+    const subinterfaces = ifaceData.subinterface || ifaceData['sub-interface'];
+    if (subinterfaces) {
+      const subifList = Array.isArray(subinterfaces) ? subinterfaces : [subinterfaces];
+      for (const subif of subifList) {
+        // Check for ip-prefix format from gNMI get response
+        const ipv4Addresses = subif?.ipv4?.address || subif?.['ipv4-address'];
+        if (ipv4Addresses) {
+          const addrList = Array.isArray(ipv4Addresses) ? ipv4Addresses : [ipv4Addresses];
+          for (const addr of addrList) {
+            // Check for ip-prefix format (gNMI get response)
+            if (addr?.['ip-prefix']) {
+              ip = addr['ip-prefix'];
+              break;
+            }
+            // Check for ipv4-address/prefix-length format (config response)
+            if (addr?.['ipv4-address'] || addr?.address) {
+              const ipAddress = addr['ipv4-address'] || addr.address;
+              const prefixLen = addr?.['prefix-length'] || addr?.prefix;
+              if (ipAddress) {
+                ip = prefixLen ? `${ipAddress}/${prefixLen}` : ipAddress;
+                break;
+              }
+            }
+          }
+          if (ip !== 'unassigned') break;
+        }
+      }
+    }
+
+    // SR Linux operational status values
+    const rawStatus = ifaceData.oper_state ||
+                     ifaceData['oper-state'] ||
+                     ifaceData.admin_state ||
+                     ifaceData['admin-state'] ||
+                     'unknown';
+
+    return {
+      name,
+      ip,
+      status: this.normalizeInterfaceStatus(String(rawStatus)),
+      description: ifaceData.description || '',
+      enabled: ifaceData.admin_state === 'enable' ||
+               ifaceData['admin-state'] === 'enable' ||
+               ifaceData.enabled !== false,
+      mtu: ifaceData.mtu || ifaceData['mtu'] || 1500,
+    };
   }
 
   /**
