@@ -37,6 +37,7 @@ cd /home/btxs/Desktop/MyData/modern_network/project
 
 2. Install dependencies:
 ```bash
+cd backend
 bun install
 ```
 
