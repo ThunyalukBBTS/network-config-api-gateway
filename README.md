@@ -67,7 +67,14 @@ cp ./backend/.env.example ./backend/.env
 # Edit .env with your settings
 ```
 
-7. Start the server:
+7. Start srl-linux for test
+```bash
+mise srl-up
+# or
+docker compose -f ./docker/docker-compose-srl.yml up -d
+```
+
+8. Start the server:
 ```bash
 mise dev
 # or
