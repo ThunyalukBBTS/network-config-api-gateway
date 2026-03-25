@@ -53,6 +53,7 @@ gnmic -a 172.20.20.4:57400 -u admin -p NokiaSrl1! --skip-verify get --path '/int
 
 ### Command to set ip
 ```bash
+enter candidate
 set / network-instance default type default admin-state enable
 
 # Bind the subinterfaces to the network-instance
@@ -82,6 +83,75 @@ enter candidate
 set / interface ethernet-1/1 subinterface 0 ipv4 address 192.168.1.1/24
 commit validate
 ```
+
+### Config interface 
+```bash
+✘ btxs@The13OS5-Lenovo  ~/Desktop/MyData/modern_network/project   main  docker exec -it clab-project-router sr_cli
+Loading environment configuration file(s): ['/etc/opt/srlinux/srlinux.rc']
+Welcome to the Nokia SR Linux CLI.
+
+--{ + running }--[  ]--
+A:root@router# enter candidate
+
+--{ + candidate shared default }--[  ]--
+A:root@router# set interface ethernet-1/1 subinterface 0 ipv4 address 192.168.10.1/24
+
+--{ +* candidate shared default }--[  ]--
+A:root@router# commit stay
+All changes have been committed. Starting new transaction.
+
+--{ + candidate shared default }--[  ]--
+A:root@router# show interface
+=================================================================================================================================================================================
+ethernet-1/1 is up, speed 25G, type None
+  ethernet-1/1.0 is up
+    Network-instances:
+      * Name: default (default)
+    Encapsulation   : null
+    Type            : routed
+    IPv4 addr    : 192.168.1.1/24 (static, preferred, primary)
+    IPv4 addr    : 192.168.10.1/24 (static, preferred)
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ethernet-1/2 is up, speed 25G, type None
+  ethernet-1/2.0 is down, reason no-ip-config
+    Network-instances:
+      * Name: default (default)
+    Encapsulation   : null
+    Type            : routed
+    IPv4 addr    : 192.168.2.1/24 (static, None)
+    IPv4 addr    : 192.168.3.1/24 (static, None)
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+mgmt0 is up, speed 1G, type None
+  mgmt0.0 is up
+    Network-instances:
+      * Name: mgmt (ip-vrf)
+    Encapsulation   : null
+    Type            : None
+    IPv4 addr    : 172.20.20.4/24 (dhcp, preferred)
+    IPv6 addr    : 3fff:172:20:20::4/64 (dhcp, preferred)
+    IPv6 addr    : fe80::908a:69ff:fec0:3269/64 (link-layer, preferred)
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+=================================================================================================================================================================================
+Summary
+  0 loopback interfaces configured
+  2 ethernet interfaces are up
+  1 management interfaces are up
+  2 subinterfaces are up
+=================================================================================================================================================================================
+
+--{ + candidate shared default }--[  ]--
+A:root@router# delete / interface ethernet-1/1 subinterface 0 ipv4 address 192.168.1.1/24
+commit stay
+All changes have been committed. Starting new transaction.
+
+--{ + candidate shared default }--[  ]--
+A:root@router# discard now
+Nothing to discard. Leaving candidate mode.
+
+--{ + running }--[  ]--
+A:root@router# quit
+```
+
 ### NETCONF (ncclient)
 
 ```python
