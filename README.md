@@ -37,8 +37,7 @@ cd /home/btxs/Desktop/MyData/modern_network/project
 
 2. Install dependencies:
 ```bash
-cd backend
-bun install
+bun install --cwd backend
 ```
 
 3. Start PostgreSQL:
@@ -64,7 +63,7 @@ bun backend/src/db/seed.ts
 
 6. Configure environment:
 ```bash
-cp .env.example .env
+cp ./backend/.env.example ./backend/.env 
 # Edit .env with your settings
 ```
 
