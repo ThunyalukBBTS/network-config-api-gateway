@@ -11,7 +11,7 @@ import { cors } from '@elysiajs/cors';
 import { swagger } from '@elysiajs/swagger';
 import { config } from './config/index.js';
 import { getDb, closeDb } from './db/index.js';
-import { authRoutes, healthRoutes, interfaceRoutes, routingRoutes, firewallRoutes } from './routes/index.js';
+import { authRoutes, healthRoutes, interfaceRoutes, routingRoutes, firewallRoutes, routerConfigRoutes } from './routes/index.js';
 
 // Create Elysia app
 const app = new Elysia({
@@ -121,9 +121,9 @@ const app = new Elysia({
       firewall: '/api/firewall',
     },
     protocol: 'gNMI',
-    gnmi: {
-      host: config.gnmiHost,
-      port: config.gnmiPort,
+    routerConfiguration: {
+      type: 'runtime',
+      endpoint: '/api/config/router',
     },
   }))
 
@@ -133,6 +133,7 @@ const app = new Elysia({
   .use(interfaceRoutes)
   .use(routingRoutes)
   .use(firewallRoutes)
+  .use(routerConfigRoutes)
 
   // Global error handler
   .onError(({ error, set, code }) => {
@@ -199,7 +200,7 @@ console.log(`
 ║                                                           ║
 ║  Configuration:                                          ║
 ║  - Protocol: gNMI                                        ║
-║  - gNMI Host: ${config.gnmiHost}:${config.gnmiPort}                     ║
+║  - Router: Runtime configured via POST /api/config/router║
 ║                                                           ║
 ╚═══════════════════════════════════════════════════════════╝
 `);

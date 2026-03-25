@@ -21,6 +21,8 @@ REST API Gateway for network router management using gNMI protocol with Nokia SR
 
 ## Quick Start
 
+> **Important:** Before using interfaces or routes endpoints, you must first configure the router by calling `POST /api/config/router` with the router IP, username, and password.
+
 ### Prerequisites
 
 - [Bun](https://bun.sh/) >= 1.1.0
@@ -103,7 +105,35 @@ Once the server is running, visit `http://localhost:3000/docs` for interactive S
 - `POST /api/auth/logout` - Logout and invalidate token
 - `GET /api/auth/me` - Get current user info
 
+### Router Configuration
+
+- `POST /api/config/router` - Configure router connection (required before using interfaces/routes)
+- `GET /api/config/router` - Get current router configuration
+- `DELETE /api/config/router` - Clear router configuration
+
+**Example: Configure router**
+```bash
+curl -X POST http://localhost:3000/api/config/router \
+  -H "Content-Type: application/json" \
+  -d '{
+    "ip": "172.20.20.2",
+    "port": 57400,
+    "user": "admin",
+    "pass": "NokiaSrl1!"
+  }'
+```
+
+**Default Router Credentials (Containerlab):**
+| Setting | Value |
+|---------|-------|
+| IP | 172.20.20.2 |
+| Port | 57400 |
+| Username | admin |
+| Password | NokiaSrl1! |
+
 ### Interfaces
+
+- `GET /api/interfaces` - Get all interface configurations
 
 - `GET /api/interfaces` - Get all interface configurations
 - `GET /api/interfaces/:name` - Get specific interface configuration
@@ -143,7 +173,7 @@ JWT_EXPIRES_IN=3600
 DATABASE_URL=postgresql://postgres:postgres@localhost:5432/network_gateway
 
 # gNMI Configuration (Nokia SR Linux)
-GNMI_HOST=172.20.20.4
+GNMI_HOST=172.20.20.2
 GNMI_PORT=57400
 GNMI_USERNAME=admin
 GNMI_PASSWORD=NokiaSrl1!
@@ -161,56 +191,56 @@ Set `MOCK_MODE=true` in your `.env` file to use mock data instead of connecting 
 
 ### Check gNMI Capabilities
 ```bash
-gnmic -a 172.20.20.4:57400 -u admin -p NokiaSrl1! --skip-verify capabilities
+gnmic -a 172.20.20.2:57400 -u admin -p NokiaSrl1! --skip-verify capabilities
 ```
 
 ### Get All Interfaces
 ```bash
-gnmic -a 172.20.20.4:57400 -u admin -p NokiaSrl1! --skip-verify get \
+gnmic -a 172.20.20.2:57400 -u admin -p NokiaSrl1! --skip-verify get \
   --path '/interface' --encoding json_ietf
 ```
 
 ### Get Specific Interface
 ```bash
-gnmic -a 172.20.20.4:57400 -u admin -p NokiaSrl1! --skip-verify get \
+gnmic -a 172.20.20.2:57400 -u admin -p NokiaSrl1! --skip-verify get \
   --path '/interface[name=ethernet-1/1]' --encoding json_ietf
 ```
 
 ### Get Interface IP Address
 ```bash
-gnmic -a 172.20.20.4:57400 -u admin -p NokiaSrl1! --skip-verify get \
+gnmic -a 172.20.20.2:57400 -u admin -p NokiaSrl1! --skip-verify get \
   --path '/interface[name=ethernet-1/1]/subinterface[index=0]/ipv4/address' --encoding json_ietf
 ```
 
 ### Configure Interface IP Address (requires delete then update)
 ```bash
 # Delete existing IP
-gnmic -a 172.20.20.4:57400 -u admin -p NokiaSrl1! --skip-verify set \
+gnmic -a 172.20.20.2:57400 -u admin -p NokiaSrl1! --skip-verify set \
   --delete "/interface[name=ethernet-1/1]/subinterface[index=0]/ipv4/address"
 
 # Add new IP
-gnmic -a 172.20.20.4:57400 -u admin -p NokiaSrl1! --skip-verify set \
+gnmic -a 172.20.20.2:57400 -u admin -p NokiaSrl1! --skip-verify set \
   --update-path "/interface[name=ethernet-1/1]/subinterface[index=0]/ipv4/address[ip-prefix=192.168.1.1/24]" \
   --update-value '{}'
 ```
 
 ### Configure Interface Description
 ```bash
-gnmic -a 172.20.20.4:57400 -u admin -p NokiaSrl1! --skip-verify set \
+gnmic -a 172.20.20.2:57400 -u admin -p NokiaSrl1! --skip-verify set \
   --update-path "/interface[name=ethernet-1/1]/description" \
   --update-value '"My Interface Description"'
 ```
 
 ### Configure Interface Admin State
 ```bash
-gnmic -a 172.20.20.4:57400 -u admin -p NokiaSrl1! --skip-verify set \
+gnmic -a 172.20.20.2:57400 -u admin -p NokiaSrl1! --skip-verify set \
   --update-path "/interface[name=ethernet-1/1]/admin-state" \
   --update-value '"disable"'
 ```
 
 ### Configure Interface MTU
 ```bash
-gnmic -a 172.20.20.4:57400 -u admin -p NokiaSrl1! --skip-verify set \
+gnmic -a 172.20.20.2:57400 -u admin -p NokiaSrl1! --skip-verify set \
   --update-path "/interface[name=ethernet-1/1]/mtu" \
   --update-value '9000'
 ```

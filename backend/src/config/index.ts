@@ -16,14 +16,6 @@ export interface Config {
   // Database
   databaseUrl: string;
 
-  // gNMI
-  gnmiHost: string;
-  gnmiPort: number;
-  gnmiUsername: string;
-  gnmiPassword: string;
-  gnmiInsecure: boolean;
-  gnmiTimeout?: number;
-
   // Mock mode
   mockMode: boolean;
 }
@@ -38,13 +30,6 @@ function loadConfig(): Config {
     jwtExpiresIn: parseInt(process.env.JWT_EXPIRES_IN || '3600', 10),
 
     databaseUrl: process.env.DATABASE_URL || 'postgresql://postgres:postgres@localhost:5432/network_gateway',
-
-    gnmiHost: process.env.GNMI_HOST || '172.20.20.3',
-    gnmiPort: parseInt(process.env.GNMI_PORT || '57400', 10),
-    gnmiUsername: process.env.GNMI_USERNAME || 'admin',
-    gnmiPassword: process.env.GNMI_PASSWORD || 'NokiaSrl1!',
-    gnmiInsecure: process.env.GNMI_INSECURE === 'true',
-    gnmiTimeout: parseInt(process.env.GNMI_TIMEOUT || '30000', 10),
 
     mockMode: process.env.MOCK_MODE === 'true',
   };

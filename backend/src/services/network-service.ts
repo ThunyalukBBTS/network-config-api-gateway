@@ -6,6 +6,7 @@
 
 import { config } from '../config/index.js';
 import { GNMIClient } from './gnmi-client.js';
+import { routerConfigService } from './router-config.service.js';
 import * as mockData from './mock-data.js';
 import type {
   InterfaceConfig,
@@ -22,20 +23,37 @@ import type {
 } from '../types/index.js';
 
 export class NetworkService {
-  private gnmiClient: GNMIClient;
+  private gnmiClient: GNMIClient | null = null;
   private useMock: boolean;
 
   constructor() {
-    this.gnmiClient = new GNMIClient({
-      host: config.gnmiHost,
-      port: config.gnmiPort,
-      username: config.gnmiUsername,
-      password: config.gnmiPassword,
-      insecure: config.gnmiInsecure,
-      timeout: config.gnmiTimeout,
-    });
-
     this.useMock = config.mockMode;
+  }
+
+  /**
+   * Get gNMI client, creating it if needed
+   * Throws error if router is not configured
+   */
+  private getGNMIClient(): GNMIClient {
+    // Get runtime router configuration
+    const routerConfig = routerConfigService.getConfig();
+
+    // Create or update client with current config
+    if (!this.gnmiClient) {
+      this.gnmiClient = new GNMIClient(routerConfig);
+    }
+
+    return this.gnmiClient;
+  }
+
+  /**
+   * Check if router is configured (for non-mock mode)
+   */
+  isRouterConfigured(): boolean {
+    if (this.useMock) {
+      return true; // Mock mode always works
+    }
+    return routerConfigService.isConfigured();
   }
 
   /**
@@ -46,7 +64,7 @@ export class NetworkService {
       return { interfaces: mockData.mockInterfaces };
     }
 
-    const response = await this.gnmiClient.getAllInterfaces();
+    const response = await this.getGNMIClient().getAllInterfaces();
 
     if (!response.success || !response.data) {
       console.error('[NetworkService] Failed to get interfaces via gNMI:', response.error);
@@ -177,6 +195,12 @@ export class NetworkService {
     const rawName = ifaceData.name || ifaceData['interface-name'] || pathName || '';
     const name = rawName; // Keep SR Linux format (ethernet-1/1), not CLI format (e1-1)
 
+    // If no name is found, this is likely an empty/invalid response (interface doesn't exist)
+    if (!name) {
+      console.warn('[NetworkService] Interface data has no name, treating as non-existent');
+      return null;
+    }
+
     // Extract IP from subinterface data
     // Handle both formats: ip-prefix (gNMI get) and ipv4-address/prefix-length (config)
     // Also get admin-state from IPv4 subinterface level
@@ -238,7 +262,7 @@ export class NetworkService {
       return mockData.getMockInterface(name) || null;
     }
 
-    const response = await this.gnmiClient.getInterface(name);
+    const response = await this.getGNMIClient().getInterface(name);
 
     if (!response.success || !response.data) {
       console.error('[NetworkService] Failed to get interface:', response.error);
@@ -273,7 +297,7 @@ export class NetworkService {
       };
     }
 
-    const response = await this.gnmiClient.setInterface(request.name, request as unknown as Record<string, unknown>);
+    const response = await this.getGNMIClient().setInterface(request.name, request as unknown as Record<string, unknown>);
     if (!response.success) {
       throw new Error(response.error || 'Failed to configure interface');
     }
@@ -292,7 +316,7 @@ export class NetworkService {
       return { routes: mockData.mockRoutes };
     }
 
-    const response = await this.gnmiClient.getRouting();
+    const response = await this.getGNMIClient().getRouting();
     if (response.success && response.data) {
       const routes = this.parseGnmiRouteData(response.data);
       return { routes };
@@ -422,7 +446,7 @@ export class NetworkService {
       };
     }
 
-    const response = await this.gnmiClient.setRouting(
+    const response = await this.getGNMIClient().setRouting(
       request.protocol,
       request as unknown as Record<string, unknown>
     );
@@ -453,7 +477,7 @@ export class NetworkService {
       return { message: 'Route removed successfully' };
     }
 
-    const response = await this.gnmiClient.deleteRouting(
+    const response = await this.getGNMIClient().deleteRouting(
       request.protocol,
       request as unknown as Record<string, unknown>
     );

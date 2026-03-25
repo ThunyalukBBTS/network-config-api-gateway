@@ -5,6 +5,7 @@
  */
 
 import { Elysia, t } from 'elysia';
+import { authenticateRequest } from '../utils/auth.js';
 import { networkService } from '../services/network-service.js';
 import { db } from '../db/index.js';
 import { verifyTokenAndGetUser, isSessionValid  } from '../utils/verify.js';
@@ -13,7 +14,6 @@ import type {
   ConfigureInterfaceRequest,
   ConfigureInterfaceResponse,
 } from '../types/index.js';
-
 
 export const interfaceRoutes = new Elysia({ prefix: "/api/interfaces" })
 
@@ -24,9 +24,9 @@ export const interfaceRoutes = new Elysia({ prefix: "/api/interfaces" })
     .get(
         "/",
         async (context: any) => {
-            const authHeader = context.request.headers.get("Authorization");
+            const user = await authenticateRequest(context.request.headers.get("Authorization"));
 
-            if (!authHeader?.startsWith("Bearer ")) {
+            if (!user) {
                 context.set.status = 401;
                 return {
                     error: "Authentication required",
@@ -34,28 +34,24 @@ export const interfaceRoutes = new Elysia({ prefix: "/api/interfaces" })
                 };
             }
 
-            const token = authHeader.substring(7);
-            const user = await verifyTokenAndGetUser(token);
+            try {
+                const result = await networkService.getInterfaces();
 
-            if (!user || !(await isSessionValid(token))) {
-                context.set.status = 401;
+                // Create audit log
+                await db.createAuditLog({
+                    userId: user.userId,
+                    action: "get_interfaces",
+                    resourceType: "interface",
+                    responseStatus: 200,
+                });
+
+                return result as GetInterfacesResponse;
+            } catch (error: any) {
+                context.set.status = 400;
                 return {
-                    error: "Authentication required",
-                    message: "Invalid or expired token",
+                    message: error.message || 'Failed to get interfaces',
                 };
             }
-
-            const result = await networkService.getInterfaces();
-
-            // Create audit log
-            await db.createAuditLog({
-                userId: user.userId,
-                action: "get_interfaces",
-                resourceType: "interface",
-                responseStatus: 200,
-            });
-
-            return result as GetInterfacesResponse;
         },
         {
             detail: {
@@ -65,6 +61,9 @@ export const interfaceRoutes = new Elysia({ prefix: "/api/interfaces" })
                 responses: {
                     200: {
                         description: "List of interfaces",
+                    },
+                    400: {
+                        description: "Bad request - router may not be configured",
                     },
                     401: {
                         description: "Authentication required",
@@ -84,9 +83,9 @@ export const interfaceRoutes = new Elysia({ prefix: "/api/interfaces" })
     .get(
         "/:name",
         async (context: any) => {
-            const authHeader = context.request.headers.get("Authorization");
+            const user = await authenticateRequest(context.request.headers.get("Authorization"));
 
-            if (!authHeader?.startsWith("Bearer ")) {
+            if (!user) {
                 context.set.status = 401;
                 return {
                     error: "Authentication required",
@@ -94,38 +93,34 @@ export const interfaceRoutes = new Elysia({ prefix: "/api/interfaces" })
                 };
             }
 
-            const token = authHeader.substring(7);
-            const user = await verifyTokenAndGetUser(token);
+            try {
+                const { name } = context.params;
+                const iface = await networkService.getInterface(name);
 
-            if (!user || !(await isSessionValid(token))) {
-                context.set.status = 401;
+                if (!iface) {
+                    context.set.status = 404;
+                    return {
+                        error: "Interface not found",
+                        message: `Interface ${name} does not exist`,
+                    };
+                }
+
+                // Create audit log
+                await db.createAuditLog({
+                    userId: user.userId,
+                    action: "get_interface",
+                    resourceType: "interface",
+                    resourceId: name,
+                    responseStatus: 200,
+                });
+
+                return { interface: iface };
+            } catch (error: any) {
+                context.set.status = 400;
                 return {
-                    error: "Authentication required",
-                    message: "Invalid or expired token",
+                    message: error.message || 'Failed to get interface',
                 };
             }
-
-            const { name } = context.params;
-            const iface = await networkService.getInterface(name);
-
-            if (!iface) {
-                context.set.status = 404;
-                return {
-                    error: "Interface not found",
-                    message: `Interface ${name} does not exist`,
-                };
-            }
-
-            // Create audit log
-            await db.createAuditLog({
-                userId: user.userId,
-                action: "get_interface",
-                resourceType: "interface",
-                resourceId: name,
-                responseStatus: 200,
-            });
-
-            return { interface: iface };
         },
         {
             params: t.Object({
@@ -138,6 +133,9 @@ export const interfaceRoutes = new Elysia({ prefix: "/api/interfaces" })
                 responses: {
                     200: {
                         description: "Interface configuration",
+                    },
+                    400: {
+                        description: "Bad request - router may not be configured",
                     },
                     404: {
                         description: "Interface not found",
@@ -154,24 +152,13 @@ export const interfaceRoutes = new Elysia({ prefix: "/api/interfaces" })
     .post(
         "/:name",
         async (context: any) => {
-            const authHeader = context.request.headers.get("Authorization");
+            const user = await authenticateRequest(context.request.headers.get("Authorization"));
 
-            if (!authHeader?.startsWith("Bearer ")) {
+            if (!user) {
                 context.set.status = 401;
                 return {
                     error: "Authentication required",
                     message: "Please provide a valid bearer token",
-                };
-            }
-
-            const token = authHeader.substring(7);
-            const user = await verifyTokenAndGetUser(token);
-
-            if (!user || !(await isSessionValid(token))) {
-                context.set.status = 401;
-                return {
-                    error: "Authentication required",
-                    message: "Invalid or expired token",
                 };
             }
 
@@ -189,33 +176,40 @@ export const interfaceRoutes = new Elysia({ prefix: "/api/interfaces" })
                 };
             }
 
-            const request: ConfigureInterfaceRequest = {
-                name,
-                ...body,
-            };
+            try {
+                const request: ConfigureInterfaceRequest = {
+                    name,
+                    ...body,
+                };
 
-            const result = await networkService.configureInterface(request);
+                const result = await networkService.configureInterface(request);
 
-            // Create audit log
-            await db.createAuditLog({
-                userId: user.userId,
-                action: "configure_interface",
-                resourceType: "interface",
-                resourceId: request.name,
-                requestData: request as unknown as Record<string, unknown>,
-                responseStatus: 200,
-            });
+                // Create audit log
+                await db.createAuditLog({
+                    userId: user.userId,
+                    action: "configure_interface",
+                    resourceType: "interface",
+                    resourceId: request.name,
+                    requestData: request as unknown as Record<string, unknown>,
+                    responseStatus: 200,
+                });
 
-            // Create config history
-            await db.createConfigHistory({
-                userId: user.userId,
-                resourceType: "interface",
-                resourceName: name,
-                newConfig: body as unknown as Record<string, unknown>,
-                changeType: "update",
-            });
+                // Create config history
+                await db.createConfigHistory({
+                    userId: user.userId,
+                    resourceType: "interface",
+                    resourceName: name,
+                    newConfig: body as unknown as Record<string, unknown>,
+                    changeType: "update",
+                });
 
-            return result as ConfigureInterfaceResponse;
+                return result as ConfigureInterfaceResponse;
+            } catch (error: any) {
+                context.set.status = 400;
+                return {
+                    message: error.message || 'Failed to configure interface',
+                };
+            }
         },
         {
             params: t.Object({
@@ -237,7 +231,7 @@ export const interfaceRoutes = new Elysia({ prefix: "/api/interfaces" })
                         description: "Interface configured successfully",
                     },
                     400: {
-                        description: "Invalid request",
+                        description: "Invalid request or router not configured",
                     },
                     401: {
                         description: "Authentication required",

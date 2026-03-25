@@ -219,6 +219,23 @@ export interface GNMIConfig {
   timeout?: number;
 }
 
+export interface RouterConfigRequest {
+  ip: string;
+  port?: number;
+  user: string;
+  pass: string;
+}
+
+export interface RouterConfigResponse {
+  message: string;
+  router: {
+    ip: string;
+    port: number;
+    user: string;
+    configured: boolean;
+  };
+}
+
 export interface GNMISetRequest {
   path: string[];
   value?: unknown;

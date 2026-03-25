@@ -9,6 +9,10 @@ import { Elysia } from 'elysia';
 import { config } from '../config/index.js';
 import { getDb } from '../db/index.js';
 import { GNMIClient } from '../services/gnmi-client.js';
+import { routerConfigService } from '../services/router-config.service.js';
+
+// Default values for display when router not configured
+const DEFAULT_GNMI_PORT = 57400;
 
 export const healthRoutes = new Elysia({ prefix: '/api/health' })
 
@@ -68,7 +72,19 @@ export const healthRoutes = new Elysia({ prefix: '/api/health' })
   .get(
     '/router',
     async () => {
-      const routerIp = config.gnmiHost;
+      // Use runtime router config
+      if (!config.mockMode && !routerConfigService.isConfigured()) {
+        return {
+          status: 'unhealthy',
+          timestamp: new Date().toISOString(),
+          router: {
+            reachable: false,
+            message: 'Router not configured. Please call POST /api/config/router first.',
+          },
+        };
+      }
+
+      const routerInfo = routerConfigService.getRouterInfo();
 
       // In mock mode, return mock response
       if (config.mockMode) {
@@ -76,15 +92,17 @@ export const healthRoutes = new Elysia({ prefix: '/api/health' })
           status: 'ok',
           timestamp: new Date().toISOString(),
           router: {
-            ip: routerIp,
+            ip: routerInfo.ip,
             reachable: true,
             mode: 'mock',
             protocol: 'gNMI',
-            port: config.gnmiPort,
+            port: routerInfo.port,
             message: 'Mock mode - router connection simulated',
           },
         };
       }
+
+      const routerIp = routerInfo.ip;
 
       // Real ping test
       const { exec } = await import('child_process');
@@ -121,7 +139,7 @@ export const healthRoutes = new Elysia({ prefix: '/api/health' })
               unit: 'ms',
             } : null,
             protocol: 'gNMI',
-            port: config.gnmiPort,
+            port: routerInfo.port,
             message: reachable ? 'Router is reachable' : 'Router is unreachable',
           },
         };
@@ -134,7 +152,7 @@ export const healthRoutes = new Elysia({ prefix: '/api/health' })
             reachable: false,
             error: error.killed ? 'Ping timeout' : error.message,
             protocol: 'gNMI',
-            port: config.gnmiPort,
+            port: routerInfo.port,
             message: 'Failed to ping router',
           },
         };
@@ -163,8 +181,20 @@ export const healthRoutes = new Elysia({ prefix: '/api/health' })
   .get(
     '/router/gnmi',
     async () => {
-      const routerIp = config.gnmiHost;
-      const port = config.gnmiPort;
+      // Use runtime router config
+      if (!config.mockMode && !routerConfigService.isConfigured()) {
+        return {
+          status: 'unhealthy',
+          timestamp: new Date().toISOString(),
+          service: {
+            name: 'gnmi',
+            reachable: false,
+            message: 'Router not configured. Please call POST /api/config/router first.',
+          },
+        };
+      }
+
+      const routerInfo = routerConfigService.getRouterInfo();
 
       // In mock mode, return mock response
       if (config.mockMode) {
@@ -173,14 +203,17 @@ export const healthRoutes = new Elysia({ prefix: '/api/health' })
           timestamp: new Date().toISOString(),
           service: {
             name: 'gnmi',
-            host: routerIp,
-            port,
+            host: routerInfo.ip,
+            port: routerInfo.port,
             reachable: true,
             mode: 'mock',
             message: 'Mock mode - gNMI connection simulated',
           },
         };
       }
+
+      const routerIp = routerInfo.ip;
+      const port = routerInfo.port;
 
       // First, test TCP connection to gNMI port
       const { exec } = await import('child_process');
@@ -210,15 +243,9 @@ export const healthRoutes = new Elysia({ prefix: '/api/health' })
           };
         }
 
-        // Port is open, try gNMI capabilities check
-        const gnmiClient = new GNMIClient({
-          host: config.gnmiHost,
-          port: config.gnmiPort,
-          username: config.gnmiUsername,
-          password: config.gnmiPassword,
-          insecure: config.gnmiInsecure,
-          timeout: 5000,
-        });
+        // Port is open, try gNMI capabilities check using runtime config
+        const routerConfig = routerConfigService.getConfig();
+        const gnmiClient = new GNMIClient(routerConfig);
 
         const capsResponse = await gnmiClient.capabilities();
 
