@@ -7,7 +7,7 @@
 
 import { config } from '../config/index.js';
 import { NETCONFClient } from './netconf-client.js';
-import { GNMIClient, mapToCliInterfaceName, type SRL_GNMI_PATHS } from './gnmi-client.js';
+import { GNMIClient, type SRL_GNMI_PATHS } from './gnmi-client.js';
 import * as mockData from './mock-data.js';
 import type {
   InterfaceConfig,
@@ -131,18 +131,6 @@ export class NetworkService {
     const interfaces: InterfaceConfig[] = [];
 
     try {
-      // SR Linux gNMI response structure from gnmic get --type state --encoding json_ietf:
-      // [{
-      //   "updates": [{
-      //     "Path": "",
-      //     "values": {
-      //       "": {
-      //         "srl_nokia-interfaces:interface": [ { iface1 }, { iface2 }, ... ]
-      //       }
-      //     }
-      //   }]
-      // }]
-
       // Handle gNMI get response format with updates array
       if (Array.isArray(data) && data.length > 0 && data[0]?.updates) {
         console.log('[NetworkService] Handling gNMI get response with updates');
@@ -154,63 +142,61 @@ export class NetworkService {
             const values = update.values;
             if (!values) continue;
 
-            // Navigate through possible nested structures
-            let interfaceArray: any[] | null = null;
+            // Check if this is a single interface response (has interface name in Path)
+            // or all interfaces response (Path is empty or missing name)
+            const pathStr = update.Path || '';
+            const singleInterfaceMatch = pathStr.match(/interface\[name=([^\]]+)\]/);
+            const isSingleInterface = !!singleInterfaceMatch;
 
-            // Case 1: values[""]["srl_nokia-interfaces:interface"] - array of interfaces
-            if (values[""]?.["srl_nokia-interfaces:interface"]) {
-              interfaceArray = values[""]["srl_nokia-interfaces:interface"];
-            }
-            // Case 2: values["srl_nokia-interfaces:interface"] - direct namespace access
-            else if (values["srl_nokia-interfaces:interface"]) {
-              interfaceArray = values["srl_nokia-interfaces:interface"];
-            }
-            // Case 3: values is the interface array
-            else if (Array.isArray(values)) {
-              interfaceArray = values;
-            }
+            console.log('[NetworkService] Path:', pathStr, 'isSingleInterface:', isSingleInterface);
 
-            if (!interfaceArray) {
-              console.warn('[NetworkService] Could not find interface array in values');
-              continue;
-            }
+            if (isSingleInterface) {
+              // Single interface response: values["srl_nokia-interfaces:interface"] is a single object
+              let ifaceData: any = null;
 
-            console.log('[NetworkService] Found', interfaceArray.length, 'interfaces');
+              if (values[""]?.["srl_nokia-interfaces:interface"]) {
+                const arr = values[""]["srl_nokia-interfaces:interface"];
+                ifaceData = Array.isArray(arr) ? arr[0] : arr;
+              } else if (values["srl_nokia-interfaces:interface"]) {
+                const arr = values["srl_nokia-interfaces:interface"];
+                ifaceData = Array.isArray(arr) ? arr[0] : arr;
+              }
 
-            // Parse each interface in the array
-            for (const ifaceData of interfaceArray) {
-              const parsed = this.parseSingleGnmiInterface(ifaceData, null);
-              if (parsed) {
-                interfaces.push(parsed);
+              if (ifaceData) {
+                // Extract interface name from Path for single interface queries
+                const pathName = singleInterfaceMatch ? singleInterfaceMatch[1] : null;
+                const parsed = this.parseSingleGnmiInterface(ifaceData, pathName);
+                if (parsed) {
+                  interfaces.push(parsed);
+                }
+              }
+            } else {
+              // All interfaces response: values[""]["srl_nokia-interfaces:interface"] is an array
+              let interfaceArray: any[] | null = null;
+
+              if (values[""]?.["srl_nokia-interfaces:interface"]) {
+                interfaceArray = values[""]["srl_nokia-interfaces:interface"];
+              } else if (values["srl_nokia-interfaces:interface"]) {
+                const arr = values["srl_nokia-interfaces:interface"];
+                interfaceArray = Array.isArray(arr) ? arr : [arr];
+              } else if (Array.isArray(values)) {
+                interfaceArray = values;
+              }
+
+              if (!interfaceArray) {
+                console.warn('[NetworkService] Could not find interface array in values');
+                continue;
+              }
+
+              console.log('[NetworkService] Found', interfaceArray.length, 'interfaces');
+
+              for (const ifaceData of interfaceArray) {
+                const parsed = this.parseSingleGnmiInterface(ifaceData, null);
+                if (parsed) {
+                  interfaces.push(parsed);
+                }
               }
             }
-          }
-        }
-        return interfaces;
-      }
-
-      // Handle single interface response format (from getInterface by name)
-      // Same structure but with a single interface
-      if (Array.isArray(data) && data.length > 0 && data[0]?.updates?.[0]?.values) {
-        const values = data[0].updates[0].values;
-
-        let ifaceData: any = null;
-
-        // Extract single interface data
-        if (values[""]?.["srl_nokia-interfaces:interface"]) {
-          const arr = values[""]["srl_nokia-interfaces:interface"];
-          ifaceData = Array.isArray(arr) ? arr[0] : arr;
-        } else if (values["srl_nokia-interfaces:interface"]) {
-          const arr = values["srl_nokia-interfaces:interface"];
-          ifaceData = Array.isArray(arr) ? arr[0] : arr;
-        } else if (values[""]) {
-          ifaceData = values[""];
-        }
-
-        if (ifaceData) {
-          const parsed = this.parseSingleGnmiInterface(ifaceData, null);
-          if (parsed) {
-            interfaces.push(parsed);
           }
         }
         return interfaces;
@@ -251,10 +237,15 @@ export class NetworkService {
   private parseSingleGnmiInterface(ifaceData: any, pathName: string | null): InterfaceConfig | null {
     if (!ifaceData) return null;
 
+    // Debug logging to understand data structure
+    console.log('[NetworkService] parseSingleGnmiInterface - pathName:', pathName);
+    console.log('[NetworkService] ifaceData keys:', Object.keys(ifaceData));
+    console.log('[NetworkService] ifaceData:', JSON.stringify(ifaceData, null, 2).substring(0, 500));
+
     // SR Linux interface properties
     // Try to get name from data first, then from path context
     const rawName = ifaceData.name || ifaceData['interface-name'] || pathName || '';
-    const name = mapToCliInterfaceName(rawName);
+    const name = rawName; // Keep SR Linux format (ethernet-1/1), not CLI format (e1-1)
 
     // Extract IP from subinterface data
     // Handle both formats: ip-prefix (gNMI get) and ipv4-address/prefix-length (config)
@@ -299,11 +290,12 @@ export class NetworkService {
       name,
       ip,
       status: this.normalizeInterfaceStatus(String(rawStatus)),
-      description: ifaceData.description || '',
+      description: String(ifaceData.description || ''),
       enabled: ifaceData.admin_state === 'enable' ||
                ifaceData['admin-state'] === 'enable' ||
                ifaceData.enabled !== false,
       mtu: ifaceData.mtu || ifaceData['mtu'] || 1500,
+      port_speed: ifaceData.ethernet?.['port-speed'] || '',
     };
   }
 
