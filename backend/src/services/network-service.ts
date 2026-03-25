@@ -132,14 +132,26 @@ export class NetworkService {
     try {
       // SR Linux gNMI response structure
       // Response may have different formats:
-      // 1. Array of interface objects
-      // 2. Object with interface key containing array
-      // 3. gNMI notification format with updates
+      // 1. gNMI get response with updates: [{ updates: [{ values: {...} }] }]
+      // 2. Array of interface objects
+      // 3. Object with interface key containing array
+      // 4. gNMI notification format with updates
 
       let interfaceData = data;
 
+      // Handle gNMI get response format with updates array
+      if (Array.isArray(data) && data.length > 0 && data[0]?.updates) {
+        // Extract values from gNMI get response format:
+        // [{ updates: [{ values: { "srl_nokia-interfaces:interface": {...} } }] }]
+        const values = data[0].updates?.[0]?.values;
+        if (values) {
+          // The interface data may be under a namespace key
+          const namespaceKey = 'srl_nokia-interfaces:interface';
+          interfaceData = values[namespaceKey] || values;
+        }
+      }
       // Navigate through different possible response structures
-      if (data?.notification?.[0]?.update) {
+      else if (data?.notification?.[0]?.update) {
         // gNMI notification format
         interfaceData = data.notification[0].update;
       } else if (data?.interface) {
@@ -166,15 +178,23 @@ export class NetworkService {
         const name = mapToCliInterfaceName(rawName);
 
         // Extract IP from subinterface data
+        // Handle both formats: ip-prefix (gNMI get) and ipv4-address/prefix-length (config)
         let ip = 'unassigned';
         const subinterfaces = ifaceData.subinterface || ifaceData['sub-interface'];
         if (subinterfaces) {
           const subifList = Array.isArray(subinterfaces) ? subinterfaces : [subinterfaces];
           for (const subif of subifList) {
+            // Check for ip-prefix format from gNMI get response
             const ipv4Addresses = subif?.ipv4?.address || subif?.['ipv4-address'];
             if (ipv4Addresses) {
               const addrList = Array.isArray(ipv4Addresses) ? ipv4Addresses : [ipv4Addresses];
               for (const addr of addrList) {
+                // Check for ip-prefix format (gNMI get response)
+                if (addr?.['ip-prefix']) {
+                  ip = addr['ip-prefix'];
+                  break;
+                }
+                // Check for ipv4-address/prefix-length format (config response)
                 if (addr?.['ipv4-address'] || addr?.address) {
                   const ipAddress = addr['ipv4-address'] || addr.address;
                   const prefixLen = addr?.['prefix-length'] || addr?.prefix;

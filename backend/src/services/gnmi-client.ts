@@ -224,6 +224,8 @@ export class GNMIClient {
         '-u', this.config.username,
         '-p', this.config.password,
         '--skip-verify',
+        '--type', 'state',        // Get operational state data
+        '--encoding', 'json_ietf', // Use JSON IETF encoding
         '--path', path,
       ];
 
