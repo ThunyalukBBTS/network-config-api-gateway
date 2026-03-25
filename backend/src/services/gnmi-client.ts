@@ -6,7 +6,7 @@
  */
 
 import { spawn } from 'child_process';
-import type { GNMIConfig, GNMIPath } from '../types/index.js';
+import type { GNMIConfig } from '../types/index.js';
 
 /**
  * SR Linux gNMI path constants
@@ -18,12 +18,13 @@ export const SRL_GNMI_PATHS = {
   INTERFACE: (name: string) => `/interface[name=${name}]`,
   INTERFACE_SUBIF: (name: string, index = 0) => `/interface[name=${name}]/subinterface[index=${index}]`,
   INTERFACE_IP: (name: string, ip: string) => `/interface[name=${name}]/subinterface[index=0]/ipv4/address[ipv4-address=${ip}]`,
-  INTERFACE_ADMIN_STATE: (name: string) => `/interface[name=${name}]/admin-state`,
+  INTERFACE_ADMIN_STATE: (name: string) => `/interface[name=${name}]/subinterface[index=0]/ipv4/admin-state`,
   INTERFACE_DESCRIPTION: (name: string) => `/interface[name=${name}]/description`,
   INTERFACE_MTU: (name: string) => `/interface[name=${name}]/mtu`,
 
   // Network instance paths (srl_nokia-network-instance)
   NETWORK_INSTANCE: (name = 'default') => `/network-instance[name=${name}]`,
+  NETWORK_INSTANCE_INTERFACE: (ni: string, iface: string) => `/network-instance[name=${ni}]/interface[name=${iface}]`,
   NETWORK_INSTANCE_ROUTE_TABLE: (name = 'default') => `/network-instance[name=${name}]/route-table/ipv4-unicast`,
   NETWORK_INSTANCE_STATIC_ROUTE: (ni: string, prefix: string) =>
     `/network-instance[name=${ni}]/static-route/ipv4[route-preference=1][prefix=${prefix}]`,
@@ -81,6 +82,14 @@ export function mapToCliInterfaceName(name: string): string {
   return name;
 }
 
+/**
+ * Get subinterface name for network-instance binding
+ * e.g., ethernet-1/1 -> ethernet-1/1.0
+ */
+function getSubinterfaceName(interfaceName: string): string {
+  return `${interfaceName}.0`;
+}
+
 export interface GNMIRequest {
   path: string[];
   value?: unknown;
@@ -91,41 +100,6 @@ export interface GNMIResponse {
   success: boolean;
   data?: unknown;
   error?: string;
-}
-
-/**
- * Parse gNMI path string to GNMIPath structure
- */
-function parseGNMIPath(pathStr: string): GNMIPath {
-  const elem: Array<{ name: string; key?: Record<string, string> }> = [];
-
-  // Split path by / and parse elements
-  const parts = pathStr.split('/').filter(p => p);
-
-  for (const part of parts) {
-    // Check for element with keys (e.g., interface[name=GigabitEthernet0/0/0])
-    const match = part.match(/^(\w+)\[([^\]]+)\]$/);
-    if (match) {
-      const name = match[1];
-      const keyStr = match[2];
-      const key: Record<string, string> = {};
-
-      // Parse key-value pairs
-      const keyPairs = keyStr.split(',');
-      for (const pair of keyPairs) {
-        const [k, v] = pair.split('=');
-        if (k && v) {
-          key[k] = v;
-        }
-      }
-
-      elem.push({ name, key: Object.keys(key).length > 0 ? key : undefined });
-    } else {
-      elem.push({ name: part });
-    }
-  }
-
-  return { elem };
 }
 
 /**
@@ -170,7 +144,7 @@ export class GNMIClient {
    * gnmic command reference:
    * - gnmic get -a <host>:<port> -u <user> -p <pass> --skip-verify --path <xpath>
    * - gnmic set -a <host>:<port> -u <user> -p <pass> --skip-verify --update <path>:<json_value>
-   * - gnmic capabilities -a <host>:<port> -u <user> -p <pass> --skip-verify
+   * gnmic capabilities -a <host>:<port> -u <user> -p <pass> --skip-verify
    */
   private async execGnmic(args: string[]): Promise<{ stdout: string; stderr: string }> {
     return new Promise((resolve, reject) => {
@@ -263,7 +237,6 @@ export class GNMIClient {
       console.log(`[gNMI] SET ${request.path.join('/')} (${operation})`, request.value);
 
       const path = pathToString(request.path);
-      const valueJson = JSON.stringify(request.value || {});
 
       // Build gnmic set command with correct flags
       const args = [
@@ -353,6 +326,42 @@ export class GNMIClient {
     // Map CLI interface name to SR Linux format
     const srlInterfaceName = mapInterfaceName(interfaceName);
 
+    // Create subinterface first (required before network-instance binding)
+    // Only do this if IP is being configured or any other change is being made
+    if (config.ip || config.description !== undefined || config.admin_state !== undefined || config.mtu !== undefined) {
+      const subinterfacePath = `/interface[name=${srlInterfaceName}]/subinterface[index=0]`;
+
+      console.log(`[gNMI] Creating subinterface ${srlInterfaceName}.0`);
+
+      const subifResponse = await this.set({
+        path: [subinterfacePath],
+        value: { index: 0 },
+        operation: 'update',
+      });
+
+      if (!subifResponse.success) {
+        console.warn('[gNMI] Failed to create subinterface:', subifResponse.error);
+        // Continue anyway, as it might already exist
+      }
+
+      // Now bind subinterface to network-instance (required for ping to work)
+      const subinterfaceName = getSubinterfaceName(srlInterfaceName);
+      const niBindPath = `/network-instance[name=default]/interface[name=${subinterfaceName}]`;
+
+      console.log(`[gNMI] Binding ${subinterfaceName} to network-instance default`);
+
+      const bindResponse = await this.set({
+        path: [niBindPath],
+        value: { name: subinterfaceName },
+        operation: 'update',
+      });
+
+      if (!bindResponse.success) {
+        console.warn('[gNMI] Failed to bind interface to network-instance:', bindResponse.error);
+        // Continue anyway, as this might already be configured
+      }
+    }
+
     // Handle IP address change - requires delete then update
     if (config.ip) {
       // First, delete existing IP address(es)
@@ -392,9 +401,11 @@ export class GNMIClient {
       }
     }
 
+    // Handle admin_state - use ipv4/admin-state path
     if (config.admin_state !== undefined) {
+      const adminStatePath = `/interface[name=${srlInterfaceName}]/subinterface[index=0]/ipv4/admin-state`;
       const adminStateResponse = await this.set({
-        path: [`/interface[name=${srlInterfaceName}]/admin-state`],
+        path: [adminStatePath],
         value: String(config.admin_state),
         operation: 'update',
       });

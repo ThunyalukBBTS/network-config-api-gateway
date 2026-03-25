@@ -179,11 +179,18 @@ export class NetworkService {
 
     // Extract IP from subinterface data
     // Handle both formats: ip-prefix (gNMI get) and ipv4-address/prefix-length (config)
+    // Also get admin-state from IPv4 subinterface level
     let ip = 'unassigned';
+    let adminState = 'enable';  // Default to enable if not configured
     const subinterfaces = ifaceData.subinterface || ifaceData['sub-interface'];
     if (subinterfaces) {
       const subifList = Array.isArray(subinterfaces) ? subinterfaces : [subinterfaces];
       for (const subif of subifList) {
+        // Get admin-state from IPv4 subinterface level (not interface level)
+        if (subif?.ipv4?.['admin-state'] !== undefined) {
+          adminState = subif.ipv4['admin-state'];
+        }
+
         // Check for ip-prefix format from gNMI get response
         const ipv4Addresses = subif?.ipv4?.address || subif?.['ipv4-address'];
         if (ipv4Addresses) {
@@ -209,8 +216,7 @@ export class NetworkService {
       }
     }
 
-    // SR Linux admin-state and oper-state
-    const adminState = ifaceData.admin_state || ifaceData['admin-state'] || 'enable';
+    // SR Linux oper-state (operational state)
     const operState = ifaceData.oper_state || ifaceData['oper-state'] || 'down';
 
     return {
