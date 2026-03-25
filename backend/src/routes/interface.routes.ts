@@ -8,7 +8,6 @@ import { Elysia, t } from 'elysia';
 import { authenticateRequest } from '../utils/auth.js';
 import { networkService } from '../services/network-service.js';
 import { db } from '../db/index.js';
-import { verifyTokenAndGetUser, isSessionValid  } from '../utils/verify.js';
 import type {
   GetInterfacesResponse,
   ConfigureInterfaceRequest,
