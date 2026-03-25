@@ -152,6 +152,13 @@ Nothing to discard. Leaving candidate mode.
 A:root@router# quit
 ```
 
+### Set interface description command
+```bash
+gnmic -a 172.20.20.4:57400 -u admin -p NokiaSrl1! --skip-verify set \
+  --update-path "/interface[name=ethernet-1/1]/description" \
+  --update-value "Elysia-API-Test"
+```
+
 ### NETCONF (ncclient)
 
 ```python
