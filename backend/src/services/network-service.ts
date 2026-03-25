@@ -154,11 +154,11 @@ export class NetworkService {
               // Single interface response: values["srl_nokia-interfaces:interface"] is a single object
               let ifaceData: any = null;
 
-              if (values[""]?.["srl_nokia-interfaces:interface"]) {
+              if (values["srl_nokia-interfaces:interface"]) {
+                const data = values["srl_nokia-interfaces:interface"];
+                ifaceData = Array.isArray(data) ? data[0] : data;
+              } else if (values[""]?.["srl_nokia-interfaces:interface"]) {
                 const arr = values[""]["srl_nokia-interfaces:interface"];
-                ifaceData = Array.isArray(arr) ? arr[0] : arr;
-              } else if (values["srl_nokia-interfaces:interface"]) {
-                const arr = values["srl_nokia-interfaces:interface"];
                 ifaceData = Array.isArray(arr) ? arr[0] : arr;
               }
 

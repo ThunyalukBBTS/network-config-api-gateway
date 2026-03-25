@@ -57,6 +57,7 @@ export interface InterfaceConfig {
   description?: string;
   enabled: boolean;
   mtu?: number;
+  port_speed?: string;
 }
 
 export type InterfaceStatus = 'up' | 'down' | 'admin-down' | 'unknown';
