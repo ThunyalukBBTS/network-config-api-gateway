@@ -274,11 +274,12 @@ export class GNMIClient {
         '--skip-verify',
       ];
 
-      if (operation === 'delete') {
-        args.push('--delete', path);
+      if (operation === "delete") {
+          args.push("--delete", path);
       } else {
-        // For update/replace, use --update flag with path:value format
-        args.push('--update', `${path}:${valueJson}`);
+          // Use --update-path and --update-value for gnmic set
+          args.push("--update-path", path);
+          args.push("--update-value", String(request.value || ""));
       }
 
       const { stdout } = await this.execGnmic(args);
