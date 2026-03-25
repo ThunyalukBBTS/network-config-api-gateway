@@ -26,6 +26,7 @@ REST API Gateway for Cisco ISR4321 router management using gNMI/NETCONF protocol
 - [Bun](https://bun.sh/) >= 1.1.0
 - [Docker](https://www.docker.com/) (for PostgreSQL)
 - [mise](https://mise.jdx.dev/) (task runner, optional)
+- [gNMI] (https://gnmic.openconfig.net/install/) (v0.45.0)
 
 ### Installation
 
