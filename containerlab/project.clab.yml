@@ -3,8 +3,7 @@ topology:
   nodes:
     router:
       kind: nokia_srlinux
-      image: ghcr.io/nokia/srlinux:24.3.3
-      startup-config: config/router-config.json
+      image: ghcr.io/nokia/srlinux
     host1:
       kind: linux
       image: ghcr.io/srl-labs/network-multitool

@@ -43,6 +43,9 @@ gnmic -a localhost:57400 -u admin -p Admin123 --insecure get \
 # Subscribe to telemetry
 gnmic -a localhost:57400 -u admin -p Admin123 --insecure subscribe \
   --path /interface/interface/state/admin-state
+
+# container lab gnmi connection testing
+gnmic -a 172.20.20.3:57400 -u admin -p NokiaSrl1! --skip-verify capabilities
 ```
 
 ### NETCONF (ncclient)
