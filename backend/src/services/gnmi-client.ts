@@ -279,7 +279,11 @@ export class GNMIClient {
       } else {
           // Use --update-path and --update-value for gnmic set
           args.push("--update-path", path);
-          args.push("--update-value", String(request.value || ""));
+          const valueStr =
+              typeof request.value === "object"
+                  ? JSON.stringify(request.value)
+                  : String(request.value || "");
+          args.push("--update-value", valueStr);
       }
 
       const { stdout } = await this.execGnmic(args);
