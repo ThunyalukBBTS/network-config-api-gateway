@@ -353,60 +353,68 @@ export class GNMIClient {
     // Map CLI interface name to SR Linux format
     const srlInterfaceName = mapInterfaceName(interfaceName);
 
-    const updates: Array<{ path: string; value: unknown }> = [];
-
-    // Build SR Linux specific updates
+    // Handle IP address change - requires delete then update
     if (config.ip) {
+      // First, delete existing IP address(es)
+      const deletePath = `/interface[name=${srlInterfaceName}]/subinterface[index=0]/ipv4/address`;
+      await this.set({
+        path: [deletePath],
+        operation: 'delete',
+      });
+
       // Parse IP address (e.g., "192.168.1.1/24")
       const ipMatch = String(config.ip).match(/^([\d.]+)\/(\d+)$/);
       if (ipMatch) {
         const [, ip, prefix] = ipMatch;
-        const ipPath = `/interface[name=${srlInterfaceName}]/subinterface[index=0]/ipv4/address[ipv4-address=${ip}]`;
-        updates.push({
-          path: ipPath,
-          value: {
-            'ipv4-address': ip,
-            'prefix-length': parseInt(prefix, 10),
-          },
+        const ipPrefix = `${ip}/${prefix}`;
+        // Use ip-prefix key format (required for SR Linux)
+        const ipPath = `/interface[name=${srlInterfaceName}]/subinterface[index=0]/ipv4/address[ip-prefix=${ipPrefix}]`;
+        const ipResponse = await this.set({
+          path: [ipPath],
+          value: {},
+          operation: 'update',
         });
+        if (!ipResponse.success) {
+          return ipResponse;
+        }
       }
     }
 
+    // Handle other configuration options
     if (config.description !== undefined) {
-      updates.push({
-        path: `/interface[name=${srlInterfaceName}]/description`,
+      const descResponse = await this.set({
+        path: [`/interface[name=${srlInterfaceName}]/description`],
         value: String(config.description),
+        operation: 'update',
       });
+      if (!descResponse.success) {
+        return descResponse;
+      }
     }
 
     if (config.enabled !== undefined) {
-      updates.push({
-        path: `/interface[name=${srlInterfaceName}]/admin-state`,
+      const enabledResponse = await this.set({
+        path: [`/interface[name=${srlInterfaceName}]/admin-state`],
         value: config.enabled ? 'enable' : 'disable',
-      });
-    }
-
-    if (config.mtu !== undefined) {
-      updates.push({
-        path: `/interface[name=${srlInterfaceName}]/mtu`,
-        value: Number(config.mtu),
-      });
-    }
-
-    // Execute updates sequentially
-    let lastResponse: GNMIResponse = { success: true };
-    for (const update of updates) {
-      lastResponse = await this.set({
-        path: [update.path],
-        value: update.value,
         operation: 'update',
       });
-      if (!lastResponse.success) {
-        return lastResponse;
+      if (!enabledResponse.success) {
+        return enabledResponse;
       }
     }
 
-    return lastResponse;
+    if (config.mtu !== undefined) {
+      const mtuResponse = await this.set({
+        path: [`/interface[name=${srlInterfaceName}]/mtu`],
+        value: Number(config.mtu),
+        operation: 'update',
+      });
+      if (!mtuResponse.success) {
+        return mtuResponse;
+      }
+    }
+
+    return { success: true };
   }
 
   /**
