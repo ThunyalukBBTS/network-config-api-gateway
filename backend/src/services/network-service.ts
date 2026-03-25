@@ -11,7 +11,6 @@ import { GNMIClient, type SRL_GNMI_PATHS } from './gnmi-client.js';
 import * as mockData from './mock-data.js';
 import type {
   InterfaceConfig,
-  InterfaceStatus,
   ConfigureInterfaceRequest,
   Route,
   ConfigureRouteRequest,
@@ -60,17 +59,6 @@ export class NetworkService {
    */
   private shouldUseGnmi(): boolean {
     return this.gnmiEnabled && this.preferredProtocol === 'gnmi';
-  }
-
-  /**
-   * Normalize interface status to valid InterfaceStatus type
-   */
-  private normalizeInterfaceStatus(status: string): InterfaceStatus {
-    const s = status.toLowerCase();
-    if (s === 'up' || s === 'enabled' || s === 'true') return 'up';
-    if (s === 'down' || s === 'disabled' || s === 'false') return 'down';
-    if (s === 'admin-down' || s === 'shutdown' || s === 'administratively-down') return 'admin-down';
-    return 'unknown';
   }
 
   /**
@@ -279,21 +267,16 @@ export class NetworkService {
       }
     }
 
-    // SR Linux operational status values
-    const rawStatus = ifaceData.oper_state ||
-                     ifaceData['oper-state'] ||
-                     ifaceData.admin_state ||
-                     ifaceData['admin-state'] ||
-                     'unknown';
+    // SR Linux admin-state and oper-state
+    const adminState = ifaceData.admin_state || ifaceData['admin-state'] || 'enable';
+    const operState = ifaceData.oper_state || ifaceData['oper-state'] || 'down';
 
     return {
       name,
       ip,
-      status: this.normalizeInterfaceStatus(String(rawStatus)),
+      admin_state: adminState === 'enable' ? 'enable' : 'disable',
+      oper_state: operState === 'up' ? 'up' : 'down',
       description: String(ifaceData.description || ''),
-      enabled: ifaceData.admin_state === 'enable' ||
-               ifaceData['admin-state'] === 'enable' ||
-               ifaceData.enabled !== false,
       mtu: ifaceData.mtu || ifaceData['mtu'] || 1500,
       port_speed: ifaceData.ethernet?.['port-speed'] || '',
     };
@@ -320,15 +303,16 @@ export class NetworkService {
       for (const iface of interfaceList) {
         const name = iface['name'] || '';
         const ip = this.extractInterfaceIP(iface);
-        const status = this.determineInterfaceStatus(iface);
+        const adminStatus = iface['admin-status'] || 'up';
+        const operStatus = iface['oper-status'] || 'down';
         const description = iface['description'] || '';
 
         interfaces.push({
           name,
           ip,
-          status,
+          admin_state: adminStatus === 'up' ? 'enable' : 'disable',
+          oper_state: operStatus === 'up' ? 'up' : 'down',
           description,
-          enabled: status === 'up',
           mtu: iface['mtu'] || 1500,
         });
       }
@@ -363,19 +347,6 @@ export class NetworkService {
       // Ignore parsing errors
     }
     return 'unassigned';
-  }
-
-  /**
-   * Determine interface status from NETCONF data
-   */
-  private determineInterfaceStatus(iface: any): InterfaceStatus {
-    const adminStatus = iface['admin-status'] || iface['oper-status'];
-    const operStatus = iface['oper-status'];
-
-    if (adminStatus === 'down') return 'admin-down';
-    if (operStatus === 'down') return 'down';
-    if (operStatus === 'up') return 'up';
-    return 'unknown';
   }
 
   /**
@@ -439,7 +410,7 @@ export class NetworkService {
       const updates: Partial<InterfaceConfig> = {};
       if (request.ip !== undefined) updates.ip = request.ip;
       if (request.description !== undefined) updates.description = request.description;
-      if (request.enabled !== undefined) updates.enabled = request.enabled;
+      if (request.admin_state !== undefined) updates.admin_state = request.admin_state;
       if (request.mtu !== undefined) updates.mtu = request.mtu;
 
       mockData.updateMockInterface(request.name, updates);

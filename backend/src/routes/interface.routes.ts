@@ -250,12 +250,12 @@ export const interfaceRoutes = new Elysia({ prefix: "/api/interfaces" })
             body: t.Object({
                 ip: t.Optional(t.String()),
                 description: t.Optional(t.String()),
-                enabled: t.Optional(t.Boolean()),
+                admin_state: t.Optional(t.Union([t.Literal("enable"), t.Literal("disable")])),
                 mtu: t.Optional(t.Number()),
             }),
             detail: {
                 description:
-                    "Configure an interface (IP address, description, state, etc.)",
+                    "Configure an interface (IP address, description, admin state, etc.)",
                 tags: ["Interfaces"],
                 security: [{ BearerAuth: [] }],
                 responses: {

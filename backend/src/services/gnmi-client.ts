@@ -149,7 +149,7 @@ export class GNMIClient {
    * Connect to gNMI device
    */
   async connect(): Promise<GNMIResponse> {
-    
+
     console.log(`[gNMI] Connected to ${this.config.host}:${this.config.port}`);
     return { success: true, data: { message: 'Connected' } };
   }
@@ -158,7 +158,7 @@ export class GNMIClient {
    * Disconnect from gNMI device
    */
   async disconnect(): Promise<GNMIResponse> {
-    
+
     console.log('[gNMI] Disconnected');
     return { success: true, data: { message: 'Disconnected' } };
   }
@@ -392,14 +392,14 @@ export class GNMIClient {
       }
     }
 
-    if (config.enabled !== undefined) {
-      const enabledResponse = await this.set({
+    if (config.admin_state !== undefined) {
+      const adminStateResponse = await this.set({
         path: [`/interface[name=${srlInterfaceName}]/admin-state`],
-        value: config.enabled ? 'enable' : 'disable',
+        value: String(config.admin_state),
         operation: 'update',
       });
-      if (!enabledResponse.success) {
-        return enabledResponse;
+      if (!adminStateResponse.success) {
+        return adminStateResponse;
       }
     }
 

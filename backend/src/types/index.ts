@@ -53,9 +53,9 @@ export interface JWTPayload {
 export interface InterfaceConfig {
   name: string;
   ip: string;
-  status: InterfaceStatus;
+  admin_state: 'enable' | 'disable';
+  oper_state: 'up' | 'down';
   description?: string;
-  enabled: boolean;
   mtu?: number;
   port_speed?: string;
 }
@@ -70,7 +70,7 @@ export interface ConfigureInterfaceRequest {
   name: string;
   ip?: string;
   description?: string;
-  enabled?: boolean;
+  admin_state?: 'enable' | 'disable';
   mtu?: number;
 }
 
