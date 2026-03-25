@@ -1,11 +1,11 @@
 # Network API Gateway
 
-REST API Gateway for Cisco ISR4321 router management using gNMI/NETCONF protocols.
+REST API Gateway for network router management using gNMI protocol with Nokia SR Linux devices.
 
 ## Features
 
 - **Authentication**: JWT-based authentication with role-based access control
-- **Interfaces**: View and configure network interfaces
+- **Interfaces**: View and configure network interfaces (IP, description, admin-state, MTU)
 - **Routing**: Configure static routes, OSPF, BGP, and EIGRP
 - **Firewall**: Manage firewall rules
 - **Audit Logging**: Track all configuration changes
@@ -17,7 +17,7 @@ REST API Gateway for Cisco ISR4321 router management using gNMI/NETCONF protocol
 - **Database**: PostgreSQL
 - **Authentication**: JWT with bcrypt
 - **Documentation**: Swagger/OpenAPI
-- **Southbound**: gNMI/NETCONF (Cisco IOS XE)
+- **Southbound**: gNMI (Nokia SR Linux)
 
 ## Quick Start
 
@@ -74,17 +74,6 @@ mise dev
 bun --watch backend/src/index.ts
 ```
 
-## Frr with netconf (beta)
-If you want to using frr:
-```bash
-mise mock-frr
-# or
-cd docker
-docker compose -f docker-compose_frr.yml up -d --build
-python ./testfrr/create_int.py
-python ./testfrr/testNC.py
-```
-
 The API will be available at `http://localhost:3000`
 
 ## API Documentation
@@ -111,12 +100,11 @@ Once the server is running, visit `http://localhost:3000/docs` for interactive S
 
 - `GET /api/interfaces` - Get all interface configurations
 - `GET /api/interfaces/:name` - Get specific interface configuration
-- `POST /api/interfaces` - Configure an interface
+- `POST /api/interfaces/:name` - Configure an interface (IP, description, admin-state, MTU)
 
 ### Routing
 
 - `GET /api/routes` - Get routing table
-- `GET /api/routes/:protocol` - Get routes by protocol
 - `POST /api/routes` - Configure routing (Static, OSPF, BGP, EIGRP)
 - `DELETE /api/routes` - Delete a route
 
@@ -125,6 +113,12 @@ Once the server is running, visit `http://localhost:3000/docs` for interactive S
 - `GET /api/firewall` - Get all firewall rules
 - `POST /api/firewall` - Configure a firewall rule
 - `DELETE /api/firewall/:ruleId` - Delete a firewall rule
+
+### Health
+
+- `GET /api/health` - API and database health check
+- `GET /api/health/router` - Router connectivity check (ping)
+- `GET /api/health/router/gnmi` - gNMI port connectivity and capabilities
 
 ## Environment Variables
 
@@ -141,26 +135,78 @@ JWT_EXPIRES_IN=3600
 # Database Configuration
 DATABASE_URL=postgresql://postgres:postgres@localhost:5432/network_gateway
 
-# gNMI Configuration
-GNMI_HOST=192.168.1.1
-GNMI_PORT=9339
+# gNMI Configuration (Nokia SR Linux)
+GNMI_HOST=172.20.20.4
+GNMI_PORT=57400
 GNMI_USERNAME=admin
-GNMI_PASSWORD=admin
+GNMI_PASSWORD=NokiaSrl1!
 GNMI_INSECURE=true
 
-# NETCONF Configuration
-NETCONF_HOST=192.168.1.1
-NETCONF_PORT=830
-NETCONF_USERNAME=admin
-NETCONF_PASSWORD=admin
-
 # Mock Mode (for development without router)
-MOCK_MODE=true
+MOCK_MODE=false
 ```
 
 ## Development with Mock Mode
 
 Set `MOCK_MODE=true` in your `.env` file to use mock data instead of connecting to a real router. This is useful for development and testing.
+
+## gNMI Commands Reference
+
+### Check gNMI Capabilities
+```bash
+gnmic -a 172.20.20.4:57400 -u admin -p NokiaSrl1! --skip-verify capabilities
+```
+
+### Get All Interfaces
+```bash
+gnmic -a 172.20.20.4:57400 -u admin -p NokiaSrl1! --skip-verify get \
+  --path '/interface' --encoding json_ietf
+```
+
+### Get Specific Interface
+```bash
+gnmic -a 172.20.20.4:57400 -u admin -p NokiaSrl1! --skip-verify get \
+  --path '/interface[name=ethernet-1/1]' --encoding json_ietf
+```
+
+### Get Interface IP Address
+```bash
+gnmic -a 172.20.20.4:57400 -u admin -p NokiaSrl1! --skip-verify get \
+  --path '/interface[name=ethernet-1/1]/subinterface[index=0]/ipv4/address' --encoding json_ietf
+```
+
+### Configure Interface IP Address (requires delete then update)
+```bash
+# Delete existing IP
+gnmic -a 172.20.20.4:57400 -u admin -p NokiaSrl1! --skip-verify set \
+  --delete "/interface[name=ethernet-1/1]/subinterface[index=0]/ipv4/address"
+
+# Add new IP
+gnmic -a 172.20.20.4:57400 -u admin -p NokiaSrl1! --skip-verify set \
+  --update-path "/interface[name=ethernet-1/1]/subinterface[index=0]/ipv4/address[ip-prefix=192.168.1.1/24]" \
+  --update-value '{}'
+```
+
+### Configure Interface Description
+```bash
+gnmic -a 172.20.20.4:57400 -u admin -p NokiaSrl1! --skip-verify set \
+  --update-path "/interface[name=ethernet-1/1]/description" \
+  --update-value '"My Interface Description"'
+```
+
+### Configure Interface Admin State
+```bash
+gnmic -a 172.20.20.4:57400 -u admin -p NokiaSrl1! --skip-verify set \
+  --update-path "/interface[name=ethernet-1/1]/admin-state" \
+  --update-value '"disable"'
+```
+
+### Configure Interface MTU
+```bash
+gnmic -a 172.20.20.4:57400 -u admin -p NokiaSrl1! --skip-verify set \
+  --update-path "/interface[name=ethernet-1/1]/mtu" \
+  --update-value '9000'
+```
 
 ## mise Tasks
 
@@ -179,25 +225,23 @@ mise test       # Run tests
 ## Project Structure
 
 ```
-src/
+backend/src/
 ├── config/
 │   └── index.ts           # Configuration
 ├── db/
 │   ├── index.ts           # Database connection
 │   ├── migrate.ts         # Migration script
 │   └── seed.ts            # Seed script
-├── middleware/
-│   └── auth.ts            # Authentication middleware
 ├── routes/
 │   ├── index.ts           # Routes aggregator
 │   ├── auth.routes.ts     # Authentication routes
 │   ├── interface.routes.ts
 │   ├── routing.routes.ts
-│   └── firewall.routes.ts
+│   ├── firewall.routes.ts
+│   └── health.routes.ts   # Health check routes
 ├── services/
 │   ├── network-service.ts # Main service layer
-│   ├── gnmi-client.ts     # gNMI client (placeholder)
-│   ├── netconf-client.ts  # NETCONF client (placeholder)
+│   ├── gnmi-client.ts     # gNMI client for Nokia SR Linux
 │   └── mock-data.ts       # Mock data for development
 ├── types/
 │   └── index.ts           # TypeScript type definitions
@@ -206,12 +250,31 @@ src/
 └── index.ts               # Application entry point
 ```
 
-## Check gNMI running
-```
-gnmic -a 172.20.20.3:57400 -u admin -p NokiaSrl1! --skip-verify capabilities
+## Interface Response Format
+
+```json
+{
+  "interfaces": [
+    {
+      "name": "ethernet-1/1",
+      "ip": "172.16.0.1/16",
+      "admin_state": "enable",
+      "oper_state": "up",
+      "description": "WAN Interface",
+      "mtu": 9232,
+      "port_speed": "25G"
+    }
+  ]
+}
 ```
 
-## YANG Models
+## Configure Interface Request
 
-YANG models for Cisco IOS XE 16.9.3 are available at:
-https://github.com/YangModels/yang/tree/main/vendor/cisco/xe/1693
+```json
+{
+  "ip": "172.16.0.1/16",
+  "description": "WAN Interface",
+  "admin_state": "enable",
+  "mtu": 9232
+}
+```

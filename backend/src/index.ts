@@ -2,8 +2,8 @@
  * Network API Gateway
  * Main application entry point
  *
- * REST API Gateway for Cisco ISR4321 router management
- * Supports gNMI/NETCONF protocols for southbound communication
+ * REST API Gateway for network router management
+ * Uses gNMI protocol for southbound communication
  */
 
 import { Elysia } from 'elysia';
@@ -31,7 +31,7 @@ const app = new Elysia({
         title: 'Network API Gateway',
         version: '1.0.0',
         description: `
-          REST API Gateway for Cisco ISR4321 router management.
+          REST API Gateway for network router management.
 
           ## Authentication
           This API uses JWT bearer token authentication. To obtain a token:
@@ -44,9 +44,8 @@ const app = new Elysia({
           - **Firewall**: Manage firewall rules
           - **Health**: Check API and router connectivity
 
-          ## Supported Protocols
-          - **NETCONF**: Traditional network configuration protocol (RFC 6241)
-          - **gNMI**: Modern gRPC-based network management protocol
+          ## Supported Protocol
+          - **gNMI**: Modern gRPC-based network management protocol for Nokia SR Linux devices
 
           ## Supported Routing Protocols
           - Static Routes
@@ -94,8 +93,7 @@ const app = new Elysia({
       version: '1.0.0',
       database: dbStatus,
       mockMode: config.mockMode,
-      preferredProtocol: config.preferredProtocol,
-      gnmiEnabled: config.gnmiEnabled,
+      protocol: 'gNMI',
     };
   }, {
     detail: {
@@ -113,7 +111,7 @@ const app = new Elysia({
   .get('/', () => ({
     name: 'Network API Gateway',
     version: '1.0.0',
-    description: 'REST API Gateway for Cisco ISR4321 router management',
+    description: 'REST API Gateway for network router management',
     documentation: '/docs',
     endpoints: {
       health: '/api/health',
@@ -122,9 +120,10 @@ const app = new Elysia({
       routes: '/api/routes',
       firewall: '/api/firewall',
     },
-    protocols: {
-      preferredProtocol: config.preferredProtocol,
-      gnmiEnabled: config.gnmiEnabled,
+    protocol: 'gNMI',
+    gnmi: {
+      host: config.gnmiHost,
+      port: config.gnmiPort,
     },
   }))
 
@@ -176,14 +175,12 @@ const app = new Elysia({
 // Format mode display
 function getModeDisplay(): string {
   if (config.mockMode) return 'MOCK (development)';
-  const proto = config.preferredProtocol.toUpperCase();
-  const gnmiStatus = config.gnmiEnabled ? 'enabled' : 'disabled';
-  return `Production (${proto}, gNMI ${gnmiStatus})`;
+  return 'Production (gNMI)';
 }
 
 // Start server
 app.listen(config.port, () => {
-    console.log(`🚀 Elysia server running on port ${config.port}`);
+  console.log(`🚀 Elysia server running on port ${config.port}`);
 });
 
 const modeDisplay = getModeDisplay();
@@ -201,9 +198,8 @@ console.log(`
 ║  Mode: ${modeDisplay.padEnd(50)}║
 ║                                                           ║
 ║  Configuration:                                          ║
-║  - Preferred Protocol: ${config.preferredProtocol.toUpperCase().padEnd(20)}              ║
-║  - gNMI: ${config.gnmiEnabled ? 'Enabled' : 'Disabled'} (port: ${config.gnmiPort})                 ║
-║  - NETCONF: Enabled (port: ${config.netconfPort})              ║
+║  - Protocol: gNMI                                        ║
+║  - gNMI Host: ${config.gnmiHost}:${config.gnmiPort}                     ║
 ║                                                           ║
 ╚═══════════════════════════════════════════════════════════╝
 `);

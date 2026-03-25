@@ -2,14 +2,12 @@
  * Health check routes
  * GET /api/health - API health check
  * GET /api/health/router - Router connectivity check (ping)
- * GET /api/health/router/netconf - NETCONF port test
  * GET /api/health/router/gnmi - gNMI port test
  */
 
 import { Elysia } from 'elysia';
 import { config } from '../config/index.js';
 import { getDb } from '../db/index.js';
-import { NETCONFClient } from '../services/netconf-client.js';
 import { GNMIClient } from '../services/gnmi-client.js';
 
 export const healthRoutes = new Elysia({ prefix: '/api/health' })
@@ -44,6 +42,7 @@ export const healthRoutes = new Elysia({ prefix: '/api/health' })
           message: dbMessage,
         },
         mockMode: config.mockMode,
+        protocol: 'gNMI',
       };
     },
     {
@@ -69,7 +68,7 @@ export const healthRoutes = new Elysia({ prefix: '/api/health' })
   .get(
     '/router',
     async () => {
-      const routerIp = config.netconfHost;
+      const routerIp = config.gnmiHost;
 
       // In mock mode, return mock response
       if (config.mockMode) {
@@ -80,8 +79,8 @@ export const healthRoutes = new Elysia({ prefix: '/api/health' })
             ip: routerIp,
             reachable: true,
             mode: 'mock',
-            protocol: 'netconf',
-            port: config.netconfPort,
+            protocol: 'gNMI',
+            port: config.gnmiPort,
             message: 'Mock mode - router connection simulated',
           },
         };
@@ -121,9 +120,8 @@ export const healthRoutes = new Elysia({ prefix: '/api/health' })
               max: parseFloat(rttMatch[3]),
               unit: 'ms',
             } : null,
-            protocol: 'netconf',
-            port: config.netconfPort,
-            gnmiPort: config.gnmiPort,
+            protocol: 'gNMI',
+            port: config.gnmiPort,
             message: reachable ? 'Router is reachable' : 'Router is unreachable',
           },
         };
@@ -135,8 +133,8 @@ export const healthRoutes = new Elysia({ prefix: '/api/health' })
             ip: routerIp,
             reachable: false,
             error: error.killed ? 'Ping timeout' : error.message,
-            protocol: 'netconf',
-            port: config.netconfPort,
+            protocol: 'gNMI',
+            port: config.gnmiPort,
             message: 'Failed to ping router',
           },
         };
@@ -152,86 +150,6 @@ export const healthRoutes = new Elysia({ prefix: '/api/health' })
           },
           503: {
             description: 'Router is unreachable',
-          },
-        },
-      },
-    }
-  )
-
-  /**
-   * GET /api/health/router/netconf
-   * Test NETCONF port connectivity
-   */
-  .get(
-    '/router/netconf',
-    async () => {
-      const routerIp = config.netconfHost;
-      const port = config.netconfPort;
-
-      // In mock mode, return mock response
-      if (config.mockMode) {
-        return {
-          status: 'ok',
-          timestamp: new Date().toISOString(),
-          service: {
-            name: 'netconf',
-            host: routerIp,
-            port,
-            reachable: true,
-            mode: 'mock',
-            message: 'Mock mode - NETCONF connection simulated',
-          },
-        };
-      }
-
-      // Test TCP connection to NETCONF port
-      const { exec } = await import('child_process');
-      const util = await import('util');
-      const execPromise = util.promisify(exec);
-
-      try {
-        const { stdout } = await execPromise(
-          `nc -zv -w 3 ${routerIp} ${port} 2>&1`,
-          { timeout: 5000 }
-        );
-
-        const reachable = stdout.includes('succeeded') || stdout.includes('open');
-
-        return {
-          status: reachable ? 'ok' : 'unhealthy',
-          timestamp: new Date().toISOString(),
-          service: {
-            name: 'netconf',
-            host: routerIp,
-            port,
-            reachable,
-            message: reachable ? 'NETCONF port is reachable' : 'NETCONF port is not reachable',
-          },
-        };
-      } catch {
-        return {
-          status: 'unhealthy',
-          timestamp: new Date().toISOString(),
-          service: {
-            name: 'netconf',
-            host: routerIp,
-            port,
-            reachable: false,
-            message: 'NETCONF port connection failed',
-          },
-        };
-      }
-    },
-    {
-      detail: {
-        description: 'Test NETCONF port (830) connectivity to router',
-        tags: ['Health'],
-        responses: {
-          200: {
-            description: 'NETCONF port status',
-          },
-          503: {
-            description: 'NETCONF port is not reachable',
           },
         },
       },
@@ -336,7 +254,7 @@ export const healthRoutes = new Elysia({ prefix: '/api/health' })
     },
     {
       detail: {
-        description: 'Test gNMI port (9339) connectivity and capabilities',
+        description: 'Test gNMI port (57400) connectivity and capabilities',
         tags: ['Health'],
         responses: {
           200: {

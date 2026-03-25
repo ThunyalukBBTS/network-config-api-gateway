@@ -60,8 +60,6 @@ export interface InterfaceConfig {
   port_speed?: string;
 }
 
-export type InterfaceStatus = 'up' | 'down' | 'admin-down' | 'unknown';
-
 export interface GetInterfacesResponse {
   interfaces: InterfaceConfig[];
 }
@@ -209,7 +207,7 @@ export interface FirewallRule {
 }
 
 // ============================================================================
-// gNMI/NETCONF Types
+// gNMI Types
 // ============================================================================
 
 export interface GNMIConfig {
@@ -221,23 +219,6 @@ export interface GNMIConfig {
   timeout?: number;
 }
 
-export interface NETCONFConfig {
-  host: string;
-  port: number;
-  username: string;
-  password: string;
-  timeout?: number;
-  autoConnect?: boolean;
-}
-
-// NETCONF Session Types
-export interface NETCONFSessionInfo {
-  sessionId?: string;
-  serverCapabilities: string[];
-  initialized: boolean;
-}
-
-// Enhanced gNMI Types for full implementation
 export interface GNMISetRequest {
   path: string[];
   value?: unknown;

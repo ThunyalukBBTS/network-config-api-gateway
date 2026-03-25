@@ -1,13 +1,11 @@
 /**
  * Network Service
  * Main service layer for network operations
- * Uses mock data or real NETCONF/gNMI clients based on configuration
- * Supports protocol selection (NETCONF or gNMI)
+ * Uses gNMI for communicating with Nokia SR Linux devices
  */
 
 import { config } from '../config/index.js';
-import { NETCONFClient } from './netconf-client.js';
-import { GNMIClient, type SRL_GNMI_PATHS } from './gnmi-client.js';
+import { GNMIClient } from './gnmi-client.js';
 import * as mockData from './mock-data.js';
 import type {
   InterfaceConfig,
@@ -24,22 +22,10 @@ import type {
 } from '../types/index.js';
 
 export class NetworkService {
-  private netconfClient: NETCONFClient;
   private gnmiClient: GNMIClient;
   private useMock: boolean;
-  private preferredProtocol: 'netconf' | 'gnmi';
-  private gnmiEnabled: boolean;
 
   constructor() {
-    this.netconfClient = new NETCONFClient({
-      host: config.netconfHost,
-      port: config.netconfPort,
-      username: config.netconfUsername,
-      password: config.netconfPassword,
-      timeout: config.netconfTimeout,
-      autoConnect: config.netconfAutoConnect,
-    });
-
     this.gnmiClient = new GNMIClient({
       host: config.gnmiHost,
       port: config.gnmiPort,
@@ -50,15 +36,6 @@ export class NetworkService {
     });
 
     this.useMock = config.mockMode;
-    this.preferredProtocol = config.preferredProtocol;
-    this.gnmiEnabled = config.gnmiEnabled;
-  }
-
-  /**
-   * Determine which protocol to use
-   */
-  private shouldUseGnmi(): boolean {
-    return this.gnmiEnabled && this.preferredProtocol === 'gnmi';
   }
 
   /**
@@ -69,44 +46,15 @@ export class NetworkService {
       return { interfaces: mockData.mockInterfaces };
     }
 
-    // Protocol selection
-    if (this.shouldUseGnmi()) {
-      return this.getInterfacesViaGnmi();
-    }
-
-    return this.getInterfacesViaNetconf();
-  }
-
-  /**
-   * Get interfaces via gNMI
-   */
-  private async getInterfacesViaGnmi(): Promise<{ interfaces: InterfaceConfig[] }> {
     const response = await this.gnmiClient.getAllInterfaces();
 
     if (!response.success || !response.data) {
       console.error('[NetworkService] Failed to get interfaces via gNMI:', response.error);
-      // Fallback to NETCONF
-      return this.getInterfacesViaNetconf();
+      return { interfaces: [] };
     }
 
     // Parse gNMI response to InterfaceConfig[]
     const interfaces = this.parseGnmiInterfaceData(response.data);
-    return { interfaces };
-  }
-
-  /**
-   * Get interfaces via NETCONF
-   */
-  private async getInterfacesViaNetconf(): Promise<{ interfaces: InterfaceConfig[] }> {
-    const response = await this.netconfClient.getAllInterfaces();
-
-    if (!response.success || !response.data) {
-      console.error('[NetworkService] Failed to get interfaces via NETCONF:', response.error);
-      return { interfaces: [] };
-    }
-
-    // Parse NETCONF response to InterfaceConfig[]
-    const interfaces = this.parseInterfaceData(response.data);
     return { interfaces };
   }
 
@@ -224,12 +172,6 @@ export class NetworkService {
    */
   private parseSingleGnmiInterface(ifaceData: any, pathName: string | null): InterfaceConfig | null {
     if (!ifaceData) return null;
-
-    // Debug logging to understand data structure
-    console.log('[NetworkService] parseSingleGnmiInterface - pathName:', pathName);
-    console.log('[NetworkService] ifaceData keys:', Object.keys(ifaceData));
-    console.log('[NetworkService] ifaceData:', JSON.stringify(ifaceData, null, 2).substring(0, 500));
-
     // SR Linux interface properties
     // Try to get name from data first, then from path context
     const rawName = ifaceData.name || ifaceData['interface-name'] || pathName || '';
@@ -283,93 +225,6 @@ export class NetworkService {
   }
 
   /**
-   * Parse NETCONF interface data to InterfaceConfig[]
-   */
-  private parseInterfaceData(data: any): InterfaceConfig[] {
-    const interfaces: InterfaceConfig[] = [];
-
-    try {
-      // Navigate through the NETCONF response structure
-      const interfacesData = data?.data?.['interfaces-oper:interfaces']?.['interface'];
-
-      if (!interfacesData) {
-        console.warn('[NetworkService] No interface data in NETCONF response');
-        return interfaces;
-      }
-
-      // Handle single interface (object) or multiple interfaces (array)
-      const interfaceList = Array.isArray(interfacesData) ? interfacesData : [interfacesData];
-
-      for (const iface of interfaceList) {
-        const name = iface['name'] || '';
-        const ip = this.extractInterfaceIP(iface);
-        const adminStatus = iface['admin-status'] || 'up';
-        const operStatus = iface['oper-status'] || 'down';
-        const description = iface['description'] || '';
-
-        interfaces.push({
-          name,
-          ip,
-          admin_state: adminStatus === 'up' ? 'enable' : 'disable',
-          oper_state: operStatus === 'up' ? 'up' : 'down',
-          description,
-          mtu: iface['mtu'] || 1500,
-        });
-      }
-    } catch (error) {
-      console.error('[NetworkService] Error parsing interface data:', error);
-    }
-
-    return interfaces;
-  }
-
-  /**
-   * Extract IP address from interface data
-   */
-  private extractInterfaceIP(iface: any): string {
-    try {
-      const ipv4 = iface['ipv4'];
-      if (ipv4) {
-        const primary = ipv4['primary'] || ipv4['ip'];
-        if (Array.isArray(primary) && primary.length > 0) {
-          const addr = primary[0]['address'] || primary[0]['ip'];
-          const mask = primary[0]['netmask'] || primary[0]['mask'];
-          if (addr && mask) {
-            return `${addr}/${this.maskToCIDR(mask)}`;
-          }
-          return addr || 'unassigned';
-        }
-        if (primary?.['address']) {
-          return primary['address'];
-        }
-      }
-    } catch (error) {
-      // Ignore parsing errors
-    }
-    return 'unassigned';
-  }
-
-  /**
-   * Convert subnet mask to CIDR notation
-   */
-  private maskToCIDR(mask: string): number {
-    const parts = mask.split('.');
-    let cidr = 0;
-    for (const part of parts) {
-      const num = parseInt(part, 10);
-      if (num === 255) cidr += 8;
-      else if (num === 254) cidr += 7;
-      else if (num === 252) cidr += 6;
-      else if (num === 248) cidr += 5;
-      else if (num === 240) cidr += 4;
-      else if (num === 224) cidr += 3;
-      else if (num === 192) cidr += 2;
-      else if (num === 128) cidr += 1;
-    }
-    return cidr;
-  }
-
-  /**
    * Get a specific interface configuration
    */
   async getInterface(name: string): Promise<InterfaceConfig | null> {
@@ -377,23 +232,14 @@ export class NetworkService {
       return mockData.getMockInterface(name) || null;
     }
 
-    if (this.shouldUseGnmi()) {
-      const response = await this.gnmiClient.getInterface(name);
-      if (response.success && response.data) {
-        const interfaces = this.parseGnmiInterfaceData(response.data);
-        return interfaces[0] || null;
-      }
-    }
-
-    // Fallback to NETCONF
-    const response = await this.netconfClient.getInterface(name);
+    const response = await this.gnmiClient.getInterface(name);
 
     if (!response.success || !response.data) {
       console.error('[NetworkService] Failed to get interface:', response.error);
       return null;
     }
 
-    const interfaces = this.parseInterfaceData(response.data);
+    const interfaces = this.parseGnmiInterfaceData(response.data);
     return interfaces[0] || null;
   }
 
@@ -421,24 +267,13 @@ export class NetworkService {
       };
     }
 
-    if (this.shouldUseGnmi()) {
-      const response = await this.gnmiClient.setInterface(request.name, request as unknown as Record<string, unknown>);
-      if (response.success) {
-        return {
-          message: `Interface ${request.name} configured successfully via gNMI`,
-          interface: request.name,
-        };
-      }
-    }
-
-    // Use NETCONF to configure the interface
-    const response = await this.netconfClient.configureInterface(request.name, request as unknown as Record<string, unknown>);
+    const response = await this.gnmiClient.setInterface(request.name, request as unknown as Record<string, unknown>);
     if (!response.success) {
       throw new Error(response.error || 'Failed to configure interface');
     }
 
     return {
-      message: `Interface ${request.name} configured successfully`,
+      message: `Interface ${request.name} configured successfully via gNMI`,
       interface: request.name,
     };
   }
@@ -451,25 +286,14 @@ export class NetworkService {
       return { routes: mockData.mockRoutes };
     }
 
-    if (this.shouldUseGnmi()) {
-      const response = await this.gnmiClient.getRouting();
-      if (response.success && response.data) {
-        const routes = this.parseGnmiRouteData(response.data);
-        return { routes };
-      }
+    const response = await this.gnmiClient.getRouting();
+    if (response.success && response.data) {
+      const routes = this.parseGnmiRouteData(response.data);
+      return { routes };
     }
 
-    // Use NETCONF to get routing table
-    const response = await this.netconfClient.getRoutingTable();
-
-    if (!response.success || !response.data) {
-      console.error('[NetworkService] Failed to get routes:', response.error);
-      return { routes: [] };
-    }
-
-    // Parse NETCONF response to Route[]
-    const routes = this.parseRouteData(response.data);
-    return { routes };
+    console.error('[NetworkService] Failed to get routes:', response.error);
+    return { routes: [] };
   }
 
   /**
@@ -556,46 +380,6 @@ export class NetworkService {
   }
 
   /**
-   * Parse NETCONF route data to Route[]
-   */
-  private parseRouteData(data: any): Route[] {
-    const routes: Route[] = [];
-
-    try {
-      const routeData = data?.data?.['ip-routing-oper:route-vrf'];
-
-      if (!routeData) {
-        console.warn('[NetworkService] No route data in NETCONF response');
-        return routes;
-      }
-
-      // Handle route entries
-      const routeList = routeData['route-table'] || [];
-      const routesArray = Array.isArray(routeList) ? routeList : [routeList];
-
-      for (const table of routesArray) {
-        const routes = table['route'] || [];
-        const routeEntries = Array.isArray(routes) ? routes : [routes];
-
-        for (const route of routeEntries) {
-          routes.push({
-            destination: route['destination'] || '0.0.0.0/0',
-            nextHop: route['next-hop'] || '',
-            interface: route['outgoing-interface'] || '',
-            protocol: route['route-protocol'] || 'unknown',
-            metric: route['metric'] || 0,
-            adminDistance: route['admin-distance'] || 0,
-          });
-        }
-      }
-    } catch (error) {
-      console.error('[NetworkService] Error parsing route data:', error);
-    }
-
-    return routes;
-  }
-
-  /**
    * Configure routing
    */
   async configureRoute(request: ConfigureRouteRequest): Promise<ConfigureRouteResponse> {
@@ -632,63 +416,18 @@ export class NetworkService {
       };
     }
 
-    if (this.shouldUseGnmi()) {
-      const response = await this.gnmiClient.setRouting(
-        request.protocol,
-        request as unknown as Record<string, unknown>
-      );
-      if (response.success) {
-        return {
-          message: `Route configuration applied successfully via gNMI`,
-          protocol: request.protocol,
-        };
-      }
+    const response = await this.gnmiClient.setRouting(
+      request.protocol,
+      request as unknown as Record<string, unknown>
+    );
+    if (response.success) {
+      return {
+        message: `Route configuration applied successfully via gNMI`,
+        protocol: request.protocol,
+      };
     }
 
-    // Use NETCONF to configure routing
-    switch (request.protocol) {
-      case 'static': {
-        const req = request as typeof request & { protocol: 'static' };
-        const response = await this.netconfClient.configureStaticRoute(
-          req.destination,
-          req.nextHop,
-          req.interface
-        );
-        if (!response.success) {
-          throw new Error(response.error || 'Failed to configure static route');
-        }
-        break;
-      }
-      case 'ospf': {
-        const req = request as typeof request & { protocol: 'ospf' };
-        const response = await this.netconfClient.configureOSPF(req as unknown as Record<string, unknown>);
-        if (!response.success) {
-          throw new Error(response.error || 'Failed to configure OSPF');
-        }
-        break;
-      }
-      case 'bgp': {
-        const req = request as typeof request & { protocol: 'bgp' };
-        const response = await this.netconfClient.configureBGP(req as unknown as Record<string, unknown>);
-        if (!response.success) {
-          throw new Error(response.error || 'Failed to configure BGP');
-        }
-        break;
-      }
-      case 'eigrp': {
-        const req = request as typeof request & { protocol: 'eigrp' };
-        const response = await this.netconfClient.configureEIGRP(req as unknown as Record<string, unknown>);
-        if (!response.success) {
-          throw new Error(response.error || 'Failed to configure EIGRP');
-        }
-        break;
-      }
-    }
-
-    return {
-      message: `Route configuration applied successfully`,
-      protocol: request.protocol,
-    };
+    throw new Error(response.error || 'Failed to configure route');
   }
 
   /**
@@ -708,18 +447,14 @@ export class NetworkService {
       return { message: 'Route removed successfully' };
     }
 
-    if (this.shouldUseGnmi()) {
-      const response = await this.gnmiClient.deleteRouting(
-        request.protocol,
-        request as unknown as Record<string, unknown>
-      );
-      if (response.success) {
-        return { message: 'Route removed successfully via gNMI' };
-      }
+    const response = await this.gnmiClient.deleteRouting(
+      request.protocol,
+      request as unknown as Record<string, unknown>
+    );
+    if (response.success) {
+      return { message: 'Route removed successfully via gNMI' };
     }
 
-    // Use NETCONF to delete route
-    // Implementation depends on protocol
     return { message: 'Route removed successfully' };
   }
 
@@ -731,38 +466,9 @@ export class NetworkService {
       return { rules: mockData.mockFirewallRules };
     }
 
-    // Use NETCONF to get firewall rules (gNMI not commonly used for ACLs)
-    const response = await this.netconfClient.getRunningConfig('<acl/>');
-
-    if (!response.success) {
-      console.error('[NetworkService] Failed to get firewall rules:', response.error);
-      return { rules: [] };
-    }
-
-    // Parse NETCONF response to FirewallRule[]
-    const rules = this.parseFirewallData(response.data);
-    return { rules };
-  }
-
-  /**
-   * Parse NETCONF firewall data to FirewallRule[]
-   */
-  private parseFirewallData(data: any): FirewallRule[] {
-    const rules: FirewallRule[] = [];
-
-    try {
-      // NETCONF ACL structure varies by device
-      // This is a placeholder for parsing firewall rules
-      const aclData = data?.data;
-      if (aclData) {
-        // Parse ACL entries from response
-        // This would need to be customized based on actual NETCONF response
-      }
-    } catch (error) {
-      console.error('[NetworkService] Error parsing firewall data:', error);
-    }
-
-    return rules;
+    // gNMI not commonly used for ACLs - return empty for now
+    console.warn('[NetworkService] Firewall rules via gNMI not yet implemented');
+    return { rules: [] };
   }
 
   /**
@@ -784,19 +490,8 @@ export class NetworkService {
       };
     }
 
-    // Use NETCONF to configure firewall rule
-    const response = await this.netconfClient.configureFirewallRule(request as unknown as Record<string, unknown>);
-    if (!response.success) {
-      throw new Error(response.error || 'Failed to configure firewall rule');
-    }
-
-    const rules = await this.getFirewallRules();
-    const newRule = rules.rules[rules.rules.length - 1];
-
-    return {
-      message: 'Firewall rule added successfully',
-      ruleId: newRule.ruleId,
-    };
+    // gNMI not commonly used for ACLs
+    throw new Error('Firewall configuration via gNMI not yet implemented');
   }
 
   /**
@@ -811,7 +506,6 @@ export class NetworkService {
       return { message: 'Firewall rule deleted successfully' };
     }
 
-    // Use NETCONF to delete firewall rule
     return { message: 'Firewall rule deleted successfully' };
   }
 }
