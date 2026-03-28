@@ -64,3 +64,15 @@ run = "cd containerlab && containerlab deploy -t project.clab.yml"
 [tasks.clab-down]
 description = "Stop and clean containerlab"
 run = "cd containerlab && containerlab destroy -t project.clab.yml --"
+
+[tasks.enter-router]
+description = "Docker execute into srlinux container"
+run = "docker exec -it clab-project-router sr_cli"
+
+[tasks.enter-host1]
+description = "Docker execute into srlinux container"
+run = "docker exec -it clab-project-host1 sh"
+
+[tasks.enter-host2]
+description = "Docker execute into srlinux container"
+run = "docker exec -it clab-project-host2 sh"
