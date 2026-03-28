@@ -193,6 +193,140 @@ export const db = {
       RETURNING id
     `;
   },
+
+  /**
+   * Get all audit logs with optional filters
+   */
+  async getAuditLogs(filters?: {
+    userId?: string;
+    action?: string;
+    resourceType?: string;
+    limit?: number;
+    offset?: number;
+  }) {
+    const sql = getDb();
+
+    type AuditLogResult = {
+      id: number;
+      action: string;
+      resource_type: string | null;
+      resource_id: string | null;
+      request_data: unknown;
+      response_status: number;
+      ip_address: string | null;
+      user_agent: string | null;
+      created_at: Date;
+      user_id: string | null;
+      user_username: string | null;
+      user_email: string | null;
+      user_role: string | null;
+    };
+
+    return await sql<AuditLogResult[]>`
+      SELECT
+        al.id,
+        al.action,
+        al.resource_type,
+        al.resource_id,
+        al.request_data,
+        al.response_status,
+        al.ip_address,
+        al.user_agent,
+        al.created_at,
+        u.id as user_id,
+        u.username as user_username,
+        u.email as user_email,
+        u.role as user_role
+      FROM audit_logs al
+      LEFT JOIN users u ON u.id = al.user_id
+      WHERE ${
+        filters?.userId
+          ? sql`al.user_id = ${filters.userId}::uuid`
+          : sql`TRUE`
+      }
+      AND ${
+        filters?.action
+          ? sql`al.action = ${filters.action}`
+          : sql`TRUE`
+      }
+      AND ${
+        filters?.resourceType
+          ? sql`al.resource_type = ${filters.resourceType}`
+          : sql`TRUE`
+      }
+      ORDER BY al.created_at DESC
+      LIMIT ${filters?.limit || 100}
+      OFFSET ${filters?.offset || 0}
+    `;
+  },
+
+  /**
+   * Get all config history with optional filters
+   */
+  async getConfigHistory(filters?: {
+    userId?: string;
+    resourceType?: string;
+    resourceName?: string;
+    changeType?: string;
+    limit?: number;
+    offset?: number;
+  }) {
+    const sql = getDb();
+
+    type ConfigHistoryResult = {
+      id: number;
+      resource_type: string;
+      resource_name: string | null;
+      old_config: unknown;
+      new_config: unknown;
+      change_type: string;
+      created_at: Date;
+      user_id: string | null;
+      user_username: string | null;
+      user_email: string | null;
+      user_role: string | null;
+    };
+
+    return await sql<ConfigHistoryResult[]>`
+      SELECT
+        ch.id,
+        ch.resource_type,
+        ch.resource_name,
+        ch.old_config,
+        ch.new_config,
+        ch.change_type,
+        ch.created_at,
+        u.id as user_id,
+        u.username as user_username,
+        u.email as user_email,
+        u.role as user_role
+      FROM config_history ch
+      LEFT JOIN users u ON u.id = ch.user_id
+      WHERE ${
+        filters?.userId
+          ? sql`ch.user_id = ${filters.userId}::uuid`
+          : sql`TRUE`
+      }
+      AND ${
+        filters?.resourceType
+          ? sql`ch.resource_type = ${filters.resourceType}`
+          : sql`TRUE`
+      }
+      AND ${
+        filters?.resourceName
+          ? sql`ch.resource_name = ${filters.resourceName}`
+          : sql`TRUE`
+      }
+      AND ${
+        filters?.changeType
+          ? sql`ch.change_type = ${filters.changeType}`
+          : sql`TRUE`
+      }
+      ORDER BY ch.created_at DESC
+      LIMIT ${filters?.limit || 100}
+      OFFSET ${filters?.offset || 0}
+    `;
+  },
 };
 
 export interface UserDB {

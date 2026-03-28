@@ -11,7 +11,7 @@ import { cors } from '@elysiajs/cors';
 import { swagger } from '@elysiajs/swagger';
 import { config } from './config/index.js';
 import { getDb, closeDb } from './db/index.js';
-import { authRoutes, healthRoutes, interfaceRoutes, routingRoutes, routerConfigRoutes } from './routes/index.js';
+import { authRoutes, healthRoutes, interfaceRoutes, routingRoutes, routerConfigRoutes, auditRoutes } from './routes/index.js';
 
 // Create Elysia app
 const app = new Elysia({
@@ -41,6 +41,7 @@ const app = new Elysia({
           ## Features
           - **Interfaces**: View and configure network interfaces
           - **Routing**: Configure connected routing by binding interfaces to network-instance
+          - **Audit Logs**: View audit logs and configuration history
           - **Health**: Check API and router connectivity
 
           ## Supported Protocol
@@ -52,6 +53,7 @@ const app = new Elysia({
         { name: 'Health', description: 'Health check endpoints' },
         { name: 'Interfaces', description: 'Network interface management' },
         { name: 'Routing', description: 'Routing configuration' },
+        { name: 'Audit', description: 'Audit logs and configuration history' },
       ],
       components: {
         securitySchemes: {
@@ -110,6 +112,8 @@ const app = new Elysia({
       auth: '/api/auth',
       interfaces: '/api/interfaces',
       routes: '/api/routes',
+      auditLogs: '/api/audit-logs',
+      configHistory: '/api/config-history',
     },
     protocol: 'gNMI',
     routerConfiguration: {
@@ -124,6 +128,7 @@ const app = new Elysia({
   .use(interfaceRoutes)
   .use(routingRoutes)
   .use(routerConfigRoutes)
+  .use(auditRoutes)
 
   // Global error handler
   .onError(({ error, set, code }) => {
