@@ -1,79 +1,30 @@
 /**
  * Routing routes
- * GET /api/routes - Get routing table
- * POST /api/routes - Configure routing (Static, OSPF, BGP, EIGRP)
- * DELETE /api/routes - Remove routes
+ * GET /api/routes - Get connected routes
+ * POST /api/routes - Configure connected routing (bind interfaces)
+ * DELETE /api/routes - Clear all routing
  */
 
 import { Elysia, t } from 'elysia';
 import { authenticateRequest } from '../utils/auth.js';
 import { networkService } from '../services/network-service.js';
 import { db } from '../db/index.js';
-import { verifyTokenAndGetUser, isSessionValid  } from '../utils/verify.js';
 import type {
   GetRoutesResponse,
   ConfigureRouteRequest,
   ConfigureRouteResponse,
-  DeleteRouteRequest,
   DeleteRouteResponse,
 } from '../types/index.js';
 
-// Union type for all routing protocol configurations
-const StaticRouteSchema = t.Object({
-  protocol: t.Literal('static'),
-  destination: t.String(),
-  nextHop: t.Optional(t.String()),
-  interface: t.Optional(t.String()),
-  metric: t.Optional(t.Number()),
+const ConnectedRouteSchema = t.Object({
+  interfaces: t.Array(t.String()),
 });
-
-const OSPFRouteSchema = t.Object({
-  protocol: t.Literal('ospf'),
-  processId: t.Number(),
-  routerId: t.String(),
-  networks: t.Array(
-    t.Object({
-      network: t.String(),
-      area: t.Number(),
-    })
-  ),
-  defaultInformationOriginate: t.Optional(t.Boolean()),
-});
-
-const BGPRouteSchema = t.Object({
-  protocol: t.Literal('bgp'),
-  asNumber: t.Number(),
-  routerId: t.String(),
-  neighbors: t.Array(
-    t.Object({
-      ip: t.String(),
-      remoteAs: t.Number(),
-      description: t.Optional(t.String()),
-      password: t.Optional(t.String()),
-    })
-  ),
-  networks: t.Array(t.String()),
-});
-
-const EIGRPRouteSchema = t.Object({
-  protocol: t.Literal('eigrp'),
-  asNumber: t.Number(),
-  routerId: t.String(),
-  networks: t.Array(t.String()),
-});
-
-const RouteRequestSchema = t.Union([
-  StaticRouteSchema,
-  OSPFRouteSchema,
-  BGPRouteSchema,
-  EIGRPRouteSchema,
-]);
 
 export const routingRoutes = new Elysia({ prefix: '/api/routes' })
 
   /**
    * GET /api/routes
-   * Get routing table
+   * Get connected routes
    */
   .get(
     '/',
@@ -109,12 +60,12 @@ export const routingRoutes = new Elysia({ prefix: '/api/routes' })
     },
     {
       detail: {
-        description: 'Get the routing table from the router',
+        description: 'Get the connected routes from the router',
         tags: ['Routing'],
         security: [{ BearerAuth: [] }],
         responses: {
           200: {
-            description: 'Routing table',
+            description: 'Connected routes',
           },
           400: {
             description: 'Bad request - router may not be configured',
@@ -131,79 +82,8 @@ export const routingRoutes = new Elysia({ prefix: '/api/routes' })
   )
 
   /**
-   * GET /api/routes/:protocol
-   * Get routes by protocol
-   */
-  .get(
-    '/:protocol',
-    async (context: any) => {
-      const user = await authenticateRequest(context.request.headers.get('Authorization'));
-
-      if (!user) {
-        context.set.status = 401;
-        return {
-          error: 'Authentication required',
-          message: 'Please provide a valid bearer token',
-        };
-      }
-
-      try {
-        const { protocol } = context.params;
-        const allRoutes = await networkService.getRoutes();
-
-        const filteredRoutes = allRoutes.routes.filter(
-          (route) => route.protocol === protocol
-        );
-
-        // Create audit log
-        await db.createAuditLog({
-          userId: user.userId,
-          action: 'get_routes',
-          resourceType: 'route',
-          resourceId: protocol,
-          responseStatus: 200,
-        });
-
-        return {
-          protocol,
-          routes: filteredRoutes,
-        };
-      } catch (error: any) {
-        context.set.status = 400;
-        return {
-          message: error.message || 'Failed to get routes',
-        };
-      }
-    },
-    {
-      params: t.Object({
-        protocol: t.Union([
-          t.Literal('static'),
-          t.Literal('ospf'),
-          t.Literal('bgp'),
-          t.Literal('eigrp'),
-          t.Literal('connected'),
-        ]),
-      }),
-      detail: {
-        description: 'Get routes filtered by protocol',
-        tags: ['Routing'],
-        security: [{ BearerAuth: [] }],
-        responses: {
-          200: {
-            description: 'Routes for the specified protocol',
-          },
-          400: {
-            description: 'Bad request - router may not be configured',
-          },
-        },
-      },
-    }
-  )
-
-  /**
    * POST /api/routes
-   * Configure routing (Static, OSPF, BGP, EIGRP)
+   * Configure connected routing (bind interfaces to network-instance)
    */
   .post(
     '/',
@@ -237,7 +117,6 @@ export const routingRoutes = new Elysia({ prefix: '/api/routes' })
           userId: user.userId,
           action: 'configure_route',
           resourceType: 'route',
-          resourceId: request.protocol,
           requestData: request as unknown as Record<string, unknown>,
           responseStatus: 200,
         });
@@ -246,7 +125,7 @@ export const routingRoutes = new Elysia({ prefix: '/api/routes' })
         await db.createConfigHistory({
           userId: user.userId,
           resourceType: 'route',
-          resourceName: request.protocol,
+          resourceName: 'connected',
           newConfig: request as unknown as Record<string, unknown>,
           changeType: 'create',
         });
@@ -260,9 +139,9 @@ export const routingRoutes = new Elysia({ prefix: '/api/routes' })
       }
     },
     {
-      body: RouteRequestSchema,
+      body: ConnectedRouteSchema,
       detail: {
-        description: 'Configure routing on the router. Supports static routes, OSPF, BGP, and EIGRP protocols.',
+        description: 'Configure connected routing by binding interfaces to network-instance. Replaces all existing bindings.',
         tags: ['Routing'],
         security: [{ BearerAuth: [] }],
         responses: {
@@ -285,7 +164,7 @@ export const routingRoutes = new Elysia({ prefix: '/api/routes' })
 
   /**
    * DELETE /api/routes
-   * Delete a route
+   * Clear all routing (unbind all interfaces)
    */
   .delete(
     '/',
@@ -300,27 +179,23 @@ export const routingRoutes = new Elysia({ prefix: '/api/routes' })
         };
       }
 
-      const request = context.body as DeleteRouteRequest;
-
       // Check if user has delete permission
       if (user?.role !== 'admin') {
         context.set.status = 403;
         return {
           error: 'Forbidden',
-          message: 'Only admin users can delete routes',
+          message: 'Only admin users can clear routes',
         };
       }
 
       try {
-        const result = await networkService.deleteRoute(request);
+        const result = await networkService.clearAllRoutes();
 
         // Create audit log
         await db.createAuditLog({
           userId: user.userId,
-          action: 'delete_route',
+          action: 'clear_routes',
           resourceType: 'route',
-          resourceId: request.destination,
-          requestData: request as unknown as Record<string, unknown>,
           responseStatus: 200,
         });
 
@@ -328,7 +203,7 @@ export const routingRoutes = new Elysia({ prefix: '/api/routes' })
         await db.createConfigHistory({
           userId: user.userId,
           resourceType: 'route',
-          resourceName: request.destination || request.protocol,
+          resourceName: 'connected',
           changeType: 'delete',
         });
 
@@ -336,29 +211,18 @@ export const routingRoutes = new Elysia({ prefix: '/api/routes' })
       } catch (error: any) {
         context.set.status = 400;
         return {
-          message: error.message || 'Failed to delete route',
+          message: error.message || 'Failed to clear routes',
         };
       }
     },
     {
-      body: t.Object({
-        protocol: t.Union([
-          t.Literal('static'),
-          t.Literal('ospf'),
-          t.Literal('bgp'),
-          t.Literal('eigrp'),
-        ]),
-        destination: t.Optional(t.String()),
-        processId: t.Optional(t.Number()),
-        asNumber: t.Optional(t.Number()),
-      }),
       detail: {
-        description: 'Delete a route from the routing table. Currently supports static routes.',
+        description: 'Clear all connected routing by unbinding all interfaces from network-instance',
         tags: ['Routing'],
         security: [{ BearerAuth: [] }],
         responses: {
           200: {
-            description: 'Route deleted successfully',
+            description: 'All routes cleared successfully',
           },
           400: {
             description: 'Invalid request or router not configured',

@@ -81,7 +81,7 @@ export interface ConfigureInterfaceResponse {
 // Routing Types
 // ============================================================================
 
-export type RoutingProtocol = 'static' | 'ospf' | 'bgp' | 'eigrp' | 'connected';
+export type RoutingProtocol = 'connected';
 
 export interface Route {
   destination: string;
@@ -96,114 +96,19 @@ export interface GetRoutesResponse {
   routes: Route[];
 }
 
-export interface StaticRouteRequest {
-  protocol: 'static';
-  destination: string;
-  nextHop?: string;
-  interface?: string;
-  metric?: number;
+export interface ConnectedRouteRequest {
+  interfaces: string[];
 }
 
-export interface OSPFConfigRequest {
-  protocol: 'ospf';
-  processId: number;
-  routerId: string;
-  networks: OSPFNetwork[];
-  defaultInformationOriginate?: boolean;
-  areas?: OSPFArea[];
-}
-
-export interface OSPFNetwork {
-  network: string;
-  area: number;
-}
-
-export interface OSPFArea {
-  areaId: number;
-  networks: string[];
-}
-
-export interface BGPConfigRequest {
-  protocol: 'bgp';
-  asNumber: number;
-  routerId: string;
-  neighbors: BGPNeighbor[];
-  networks: string[];
-  redistribute?: string[];
-}
-
-export interface BGPNeighbor {
-  ip: string;
-  remoteAs: number;
-  description?: string;
-  password?: string;
-  timers?: {
-    keepalive?: number;
-    hold?: number;
-  };
-}
-
-export interface EIGRPConfigRequest {
-  protocol: 'eigrp';
-  asNumber: number;
-  routerId: string;
-  networks: string[];
-}
-
-export type ConfigureRouteRequest =
-  | StaticRouteRequest
-  | OSPFConfigRequest
-  | BGPConfigRequest
-  | EIGRPConfigRequest;
+export type ConfigureRouteRequest = ConnectedRouteRequest;
 
 export interface ConfigureRouteResponse {
   message: string;
-  protocol: RoutingProtocol;
-}
-
-export interface DeleteRouteRequest {
-  protocol: RoutingProtocol;
-  destination?: string;
-  processId?: number;
-  asNumber?: number;
+  interfaces: string[];
 }
 
 export interface DeleteRouteResponse {
   message: string;
-}
-
-// ============================================================================
-// Firewall Types
-// ============================================================================
-
-export type FirewallAction = 'permit' | 'deny';
-
-export interface FirewallRuleRequest {
-  action: FirewallAction;
-  source: string;
-  destination: string;
-  protocol?: string;
-  port?: number;
-  portRange?: {
-    start: number;
-    end: number;
-  };
-  description?: string;
-}
-
-export interface FirewallRuleResponse {
-  message: string;
-  ruleId: number;
-}
-
-export interface FirewallRule {
-  ruleId: number;
-  action: FirewallAction;
-  source: string;
-  destination: string;
-  protocol?: string;
-  port?: number;
-  hitCount?: number;
 }
 
 // ============================================================================

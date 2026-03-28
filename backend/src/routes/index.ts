@@ -6,7 +6,6 @@ import { authRoutes } from './auth.routes.js';
 import { healthRoutes } from './health.routes.js';
 import { interfaceRoutes } from './interface.routes.js';
 import { routingRoutes } from './routing.routes.js';
-import { firewallRoutes } from './firewall.routes.js';
 import { routerConfigRoutes } from './config.routes.js';
 
 export {
@@ -14,6 +13,5 @@ export {
     healthRoutes,
     interfaceRoutes,
     routingRoutes,
-    firewallRoutes,
     routerConfigRoutes,
 };

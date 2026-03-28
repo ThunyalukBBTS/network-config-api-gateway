@@ -438,84 +438,154 @@ export class GNMIClient {
   }
 
   /**
-   * Set routing configuration using SR Linux paths
+   * Get all interfaces bound to a network-instance
    */
-  async setRouting(protocol: string, config: Record<string, unknown>): Promise<GNMIResponse> {
-    const ni = config.networkInstance as string || 'default';
-
-    switch (protocol) {
-      case 'static': {
-        const destination = config.destination as string;
-        const nextHop = config.nextHop as string;
-        const metric = config.metric as number | undefined;
-
-        if (!destination) {
-          return { success: false, error: 'Destination is required for static routes' };
-        }
-
-        // Build SR Linux static route path
-        const routePath = `/network-instance[name=${ni}]/static-route/ipv4[route-preference=1][prefix=${destination}]`;
-
-        const value: Record<string, unknown> = {
-          prefix: destination,
-          'route-preference': 1,
-        };
-
-        if (nextHop) {
-          value['next-hop'] = [{
-            index: 1,
-            'next-hop-address': nextHop,
-            metric: metric ?? 1,
-          }];
-        }
-
-        return this.set({
-          path: [routePath],
-          value,
-          operation: 'update',
-        });
-      }
-
-      case 'ospf':
-      case 'bgp':
-        // Return not implemented for dynamic protocols
-        return {
-          success: false,
-          error: `${protocol} configuration via gNMI not yet implemented`,
-        };
-
-      default:
-        return {
-          success: false,
-          error: `Unknown protocol: ${protocol}`,
-        };
-    }
+  async getNetworkInstanceInterfaces(networkInstance = 'default'): Promise<GNMIResponse> {
+    const path = `/network-instance[name=${networkInstance}]/interface`;
+    return this.get({
+      path: [path],
+    });
   }
 
   /**
-   * Delete routing configuration using SR Linux paths
+   * Bind an interface to a network-instance (creates connected route)
+   * @param interfaceName - Interface name (e.g., 'ethernet-1/1')
+   * @param networkInstance - Network instance name (default: 'default')
    */
-  async deleteRouting(protocol: string, config: Record<string, unknown>): Promise<GNMIResponse> {
-    const ni = config.networkInstance as string || 'default';
+  async bindInterfaceToNetworkInstance(
+    interfaceName: string,
+    networkInstance = 'default'
+  ): Promise<GNMIResponse> {
+    // Convert to subinterface name (e.g., ethernet-1/1 -> ethernet-1/1.0)
+    const srlInterfaceName = mapInterfaceName(interfaceName);
+    const subinterfaceName = getSubinterfaceName(srlInterfaceName);
+    const path = `/network-instance[name=${networkInstance}]/interface[name=${subinterfaceName}]`;
 
-    if (protocol === 'static') {
-      const destination = config.destination as string;
-      if (!destination) {
-        return { success: false, error: 'Destination is required for static route deletion' };
-      }
+    console.log(`[gNMI] Binding ${subinterfaceName} to network-instance ${networkInstance}`);
 
-      const routePath = `/network-instance[name=${ni}]/static-route/ipv4[route-preference=1][prefix=${destination}]`;
+    return this.set({
+      path: [path],
+      value: { name: subinterfaceName },
+      operation: 'update',
+    });
+  }
 
-      return this.set({
-        path: [routePath],
-        operation: 'delete',
-      });
+  /**
+   * Unbind an interface from a network-instance (removes connected route)
+   * @param interfaceName - Interface name (e.g., 'ethernet-1/1')
+   * @param networkInstance - Network instance name (default: 'default')
+   */
+  async unbindInterfaceFromNetworkInstance(
+    interfaceName: string,
+    networkInstance = 'default'
+  ): Promise<GNMIResponse> {
+    // Convert to subinterface name (e.g., ethernet-1/1 -> ethernet-1/1.0)
+    const srlInterfaceName = mapInterfaceName(interfaceName);
+    const subinterfaceName = getSubinterfaceName(srlInterfaceName);
+    const path = `/network-instance[name=${networkInstance}]/interface[name=${subinterfaceName}]`;
+
+    console.log(`[gNMI] Unbinding ${subinterfaceName} from network-instance ${networkInstance}`);
+
+    return this.set({
+      path: [path],
+      operation: 'delete',
+    });
+  }
+
+  /**
+   * Unbind all interfaces from a network-instance
+   * @param networkInstance - Network instance name (default: 'default')
+   */
+  async unbindAllInterfacesFromNetworkInstance(networkInstance = 'default'): Promise<GNMIResponse> {
+    // First get all current bindings
+    const bindingsResponse = await this.getNetworkInstanceInterfaces(networkInstance);
+
+    if (!bindingsResponse.success || !bindingsResponse.data) {
+      return { success: false, error: 'Failed to get network-instance bindings' };
     }
 
-    return {
-      success: false,
-      error: `${protocol} deletion via gNMI not yet implemented`,
-    };
+    // Extract interface names from the response
+    const bindings = this.parseNetworkInstanceBindings(bindingsResponse.data);
+    const errors: string[] = [];
+
+    // Unbind each interface
+    for (const binding of bindings) {
+      const result = await this.unbindInterfaceFromNetworkInstance(binding, networkInstance);
+      if (!result.success) {
+        errors.push(`Failed to unbind ${binding}: ${result.error}`);
+      }
+    }
+
+    if (errors.length > 0) {
+      return {
+        success: false,
+        error: `Some bindings failed: ${errors.join(', ')}`,
+      };
+    }
+
+    return { success: true };
+  }
+
+  /**
+   * Parse network-instance bindings from gNMI response
+   */
+  private parseNetworkInstanceBindings(data: any): string[] {
+    const bindings: string[] = [];
+
+    try {
+      console.log('[gNMI] parseNetworkInstanceBindings called, data type:', Array.isArray(data) ? 'array' : typeof data);
+
+      // Handle gNMI get response format with updates array
+      if (Array.isArray(data) && data.length > 0 && data[0]?.updates) {
+        console.log('[gNMI] Handling gNMI get response with updates');
+
+        for (const item of data) {
+          if (!item?.updates) continue;
+
+          for (const update of item.updates) {
+            const values = update.values;
+            if (!values) continue;
+
+            // Find the network-instance key
+            let interfaceData = null;
+            for (const key of Object.keys(values)) {
+              if (key.includes('network-instance') && values[key]?.interface) {
+                interfaceData = values[key].interface;
+                break;
+              }
+            }
+
+            if (!interfaceData) {
+              console.warn('[gNMI] Could not find interface array in values');
+              continue;
+            }
+
+            if (!Array.isArray(interfaceData)) {
+              continue;
+            }
+
+            console.log('[gNMI] Found', interfaceData.length, 'bound interfaces');
+
+            for (const iface of interfaceData) {
+              let name = iface?.name || '';
+              if (name) {
+                // Remove .0 suffix to get base interface name
+                name = name.replace(/\.0$/, '');
+                console.log('[gNMI] Found binding:', name);
+                bindings.push(name);
+              }
+            }
+          }
+        }
+        return bindings;
+      }
+
+      console.warn('[gNMI] Unknown gNMI response structure for bindings');
+    } catch (error) {
+      console.error('[gNMI] Error parsing network-instance bindings:', error);
+    }
+
+    return bindings;
   }
 
   /**

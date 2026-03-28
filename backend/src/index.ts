@@ -11,7 +11,7 @@ import { cors } from '@elysiajs/cors';
 import { swagger } from '@elysiajs/swagger';
 import { config } from './config/index.js';
 import { getDb, closeDb } from './db/index.js';
-import { authRoutes, healthRoutes, interfaceRoutes, routingRoutes, firewallRoutes, routerConfigRoutes } from './routes/index.js';
+import { authRoutes, healthRoutes, interfaceRoutes, routingRoutes, routerConfigRoutes } from './routes/index.js';
 
 // Create Elysia app
 const app = new Elysia({
@@ -40,18 +40,11 @@ const app = new Elysia({
 
           ## Features
           - **Interfaces**: View and configure network interfaces
-          - **Routing**: Configure static routes, OSPF, BGP, and EIGRP
-          - **Firewall**: Manage firewall rules
+          - **Routing**: Configure connected routing by binding interfaces to network-instance
           - **Health**: Check API and router connectivity
 
           ## Supported Protocol
           - **gNMI**: Modern gRPC-based network management protocol for Nokia SR Linux devices
-
-          ## Supported Routing Protocols
-          - Static Routes
-          - OSPF (Open Shortest Path First)
-          - BGP (Border Gateway Protocol)
-          - EIGRP (Enhanced Interior Gateway Routing Protocol)
         `,
       },
       tags: [
@@ -59,7 +52,6 @@ const app = new Elysia({
         { name: 'Health', description: 'Health check endpoints' },
         { name: 'Interfaces', description: 'Network interface management' },
         { name: 'Routing', description: 'Routing configuration' },
-        { name: 'Firewall', description: 'Firewall rule management' },
       ],
       components: {
         securitySchemes: {
@@ -118,7 +110,6 @@ const app = new Elysia({
       auth: '/api/auth',
       interfaces: '/api/interfaces',
       routes: '/api/routes',
-      firewall: '/api/firewall',
     },
     protocol: 'gNMI',
     routerConfiguration: {
@@ -132,7 +123,6 @@ const app = new Elysia({
   .use(authRoutes)
   .use(interfaceRoutes)
   .use(routingRoutes)
-  .use(firewallRoutes)
   .use(routerConfigRoutes)
 
   // Global error handler

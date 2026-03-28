@@ -13,13 +13,9 @@ import type {
   ConfigureInterfaceRequest,
   Route,
   ConfigureRouteRequest,
-  DeleteRouteRequest,
-  FirewallRuleRequest,
-  FirewallRule,
   ConfigureRouteResponse,
   ConfigureInterfaceResponse,
   DeleteRouteResponse,
-  FirewallRuleResponse,
 } from '../types/index.js';
 
 export class NetworkService {
@@ -309,17 +305,23 @@ export class NetworkService {
   }
 
   /**
-   * Get routing table
+   * Get connected routes only
    */
   async getRoutes(): Promise<{ routes: Route[] }> {
     if (this.useMock) {
-      return { routes: mockData.mockRoutes };
+      // Filter mock routes for connected only
+      return {
+        routes: mockData.mockRoutes.filter(r => r.protocol === 'connected')
+      };
     }
 
     const response = await this.getGNMIClient().getRouting();
     if (response.success && response.data) {
-      const routes = this.parseGnmiRouteData(response.data);
-      return { routes };
+      const allRoutes = this.parseGnmiRouteData(response.data);
+      // Filter for connected routes only
+      return {
+        routes: allRoutes.filter(route => route.protocol === 'connected')
+      };
     }
 
     console.error('[NetworkService] Failed to get routes:', response.error);
@@ -334,74 +336,54 @@ export class NetworkService {
     const routes: Route[] = [];
 
     try {
-      // SR Linux gNMI route response structure
-      let routeData = data;
+      console.log('[NetworkService] parseGnmiRouteData called, data type:', Array.isArray(data) ? 'array' : typeof data);
 
-      // Navigate through different possible response structures
-      if (data?.notification?.[0]?.update) {
-        routeData = data.notification[0].update;
-      } else if (data?.['route-entry']) {
-        routeData = data['route-entry'];
-      } else if (data?.route) {
-        routeData = data.route;
-      } else if (Array.isArray(data)) {
-        routeData = data;
-      }
+      // Handle gNMI get response format with updates array
+      if (Array.isArray(data) && data.length > 0 && data[0]?.updates) {
+        console.log('[NetworkService] Handling gNMI get response with updates');
 
-      if (!routeData) {
-        console.warn('[NetworkService] No route data in gNMI response');
+        for (const item of data) {
+          if (!item?.updates) continue;
+
+          for (const update of item.updates) {
+            const values = update.values;
+            if (!values) continue;
+
+            // The route data is under the long path key
+            // Try multiple possible key formats
+            let routeTableData = null;
+            for (const key of Object.keys(values)) {
+              if (key.includes('ipv4-unicast') && values[key]?.route) {
+                routeTableData = values[key];
+                break;
+              }
+            }
+
+            if (!routeTableData) {
+              console.warn('[NetworkService] Could not find route table data in values, keys:', Object.keys(values));
+              continue;
+            }
+
+            const routeArray = routeTableData.route;
+            if (!Array.isArray(routeArray)) {
+              continue;
+            }
+
+            console.log('[NetworkService] Found', routeArray.length, 'routes');
+
+            for (const routeDataEntry of routeArray) {
+              const route = this.parseSingleGnmiRoute(routeDataEntry);
+              if (route) {
+                routes.push(route);
+              }
+            }
+          }
+        }
         return routes;
       }
 
-      const routeList = Array.isArray(routeData) ? routeData : [routeData];
-
-      for (const route of routeList) {
-        // Handle both gNMI update format and direct route format
-        const routeDataEntry = route?.val || route;
-
-        if (!routeDataEntry) continue;
-
-        // SR Linux route properties
-        const destination = routeDataEntry.prefix ||
-                           routeDataEntry.destination ||
-                           routeDataEntry['dest-prefix'] ||
-                           '0.0.0.0/0';
-
-        const nextHop = routeDataEntry['next-hop']?.[0]?.['next-hop-address'] ||
-                       routeDataEntry['next-hop-address'] ||
-                       routeDataEntry.nextHop ||
-                       routeDataEntry['next-hop'] ||
-                       '';
-
-        // Determine protocol from SR Linux route attributes
-        let protocol = routeDataEntry.protocol ||
-                      routeDataEntry['route-protocol'] ||
-                      routeDataEntry['route-origin'] ||
-                      'unknown';
-
-        // Map SR Linux protocol values to standard names
-        if (protocol === 'static' || protocol === 'STATIC') protocol = 'static';
-        if (protocol === 'bgp' || protocol === 'BGP') protocol = 'bgp';
-        if (protocol === 'ospf' || protocol === 'OSPF') protocol = 'ospf';
-        if (protocol === 'connected' || protocol === 'CONNECTED') protocol = 'connected';
-        if (protocol === 'local' || protocol === 'LOCAL') protocol = 'local';
-
-        routes.push({
-          destination,
-          nextHop,
-          interface: routeDataEntry['outgoing-interface'] ||
-                    routeDataEntry.interface ||
-                    routeDataEntry['if-name'] ||
-                    '',
-          protocol,
-          metric: routeDataEntry.metric ||
-                 routeDataEntry['route-preference'] ||
-                 0,
-          adminDistance: routeDataEntry.adminDistance ||
-                        routeDataEntry['admin-distance'] ||
-                        0,
-        });
-      }
+      // Fallback: Try to handle other response structures
+      console.warn('[NetworkService] Unknown gNMI response structure for routes');
     } catch (error) {
       console.error('[NetworkService] Error parsing gNMI route data:', error);
     }
@@ -410,133 +392,105 @@ export class NetworkService {
   }
 
   /**
-   * Configure routing
+   * Parse a single gNMI route entry
+   */
+  private parseSingleGnmiRoute(routeDataEntry: any): Route | null {
+    if (!routeDataEntry) return null;
+
+    // Get destination prefix
+    const destination = routeDataEntry['ipv4-prefix'] ||
+                       routeDataEntry.prefix ||
+                       routeDataEntry.destination ||
+                       routeDataEntry['dest-prefix'] ||
+                       '0.0.0.0/0';
+
+    // Next hop - not directly available in connected routes, empty string
+    const nextHop = '';
+
+    // Get outgoing interface from next-hop-group if available
+    let interfaceName = '';
+    if (routeDataEntry['next-hop-group']) {
+      // For connected routes, interface info might be in next-hop-group
+      // We'll leave it empty for now as connected routes don't show it directly
+    }
+
+    // Determine protocol from SR Linux route-type attribute
+    let protocol = 'unknown';
+    const routeType = routeDataEntry['route-type'] || '';
+
+    if (routeType.includes('local') || routeType === 'srl_nokia-common:local') {
+      protocol = 'connected';
+    } else if (routeType.includes('static')) {
+      protocol = 'static';
+    } else if (routeType.includes('bgp')) {
+      protocol = 'bgp';
+    } else if (routeType.includes('ospf')) {
+      protocol = 'ospf';
+    }
+
+    return {
+      destination,
+      nextHop,
+      interface: interfaceName,
+      protocol,
+      metric: routeDataEntry.metric || 0,
+      adminDistance: 0,
+    };
+  }
+
+  /**
+   * Configure connected routing (bind interfaces to network-instance)
    */
   async configureRoute(request: ConfigureRouteRequest): Promise<ConfigureRouteResponse> {
-    if (this.useMock) {
-      switch (request.protocol) {
-        case 'static': {
-          const req = request as typeof request & { protocol: 'static' };
-          mockData.addMockStaticRoute({
-            destination: req.destination,
-            nextHop: req.nextHop || '',
-            interface: req.interface || '',
-            metric: req.metric || 0,
-            adminDistance: 1,
-          });
-          break;
-        }
-        case 'ospf': {
-          // Store OSPF config (in real implementation, this would be sent to device)
-          break;
-        }
-        case 'bgp': {
-          // Store BGP config
-          break;
-        }
-        case 'eigrp': {
-          // Store EIGRP config
-          break;
-        }
-      }
+    const { interfaces } = request;
 
+    if (this.useMock) {
+      // In mock mode, just return success
       return {
-        message: `Route configuration applied successfully`,
-        protocol: request.protocol,
+        message: `Connected routing configured successfully`,
+        interfaces,
       };
     }
 
-    const response = await this.getGNMIClient().setRouting(
-      request.protocol,
-      request as unknown as Record<string, unknown>
-    );
-    if (response.success) {
-      return {
-        message: `Route configuration applied successfully via gNMI`,
-        protocol: request.protocol,
-      };
-    }
+    const client = this.getGNMIClient();
 
-    throw new Error(response.error || 'Failed to configure route');
-  }
+    // First, unbind all existing interfaces
+    await client.unbindAllInterfacesFromNetworkInstance('default');
 
-  /**
-   * Delete route
-   */
-  async deleteRoute(request: DeleteRouteRequest): Promise<DeleteRouteResponse> {
-    if (this.useMock) {
-      if (request.protocol === 'static' && request.destination) {
-        const success = mockData.deleteMockRoute(request.destination, 'static');
-        if (!success) {
-          throw new Error(`Route ${request.destination} not found`);
-        }
-      } else {
-        throw new Error('Only static routes can be deleted with destination parameter');
+    // Then bind the new interfaces
+    const errors: string[] = [];
+    for (const iface of interfaces) {
+      const result = await client.bindInterfaceToNetworkInstance(iface, 'default');
+      if (!result.success) {
+        errors.push(`Failed to bind ${iface}: ${result.error}`);
       }
-
-      return { message: 'Route removed successfully' };
     }
 
-    const response = await this.getGNMIClient().deleteRouting(
-      request.protocol,
-      request as unknown as Record<string, unknown>
-    );
-    if (response.success) {
-      return { message: 'Route removed successfully via gNMI' };
+    if (errors.length > 0) {
+      throw new Error(`Some interfaces failed to bind: ${errors.join(', ')}`);
     }
 
-    return { message: 'Route removed successfully' };
+    return {
+      message: `Connected routing configured successfully via gNMI`,
+      interfaces,
+    };
   }
 
   /**
-   * Get firewall rules
+   * Clear all routing (unbind all interfaces from network-instance)
    */
-  async getFirewallRules(): Promise<{ rules: FirewallRule[] }> {
+  async clearAllRoutes(): Promise<DeleteRouteResponse> {
     if (this.useMock) {
-      return { rules: mockData.mockFirewallRules };
+      return { message: 'All routes cleared successfully' };
     }
 
-    // gNMI not commonly used for ACLs - return empty for now
-    console.warn('[NetworkService] Firewall rules via gNMI not yet implemented');
-    return { rules: [] };
-  }
+    const response = await this.getGNMIClient().unbindAllInterfacesFromNetworkInstance('default');
 
-  /**
-   * Configure firewall rule
-   */
-  async configureFirewallRule(request: FirewallRuleRequest): Promise<FirewallRuleResponse> {
-    if (this.useMock) {
-      const newRule = mockData.addMockFirewallRule({
-        action: request.action,
-        source: request.source,
-        destination: request.destination,
-        protocol: request.protocol,
-        port: request.port,
-      });
-
-      return {
-        message: 'Firewall rule added successfully',
-        ruleId: newRule.ruleId,
-      };
+    if (!response.success) {
+      throw new Error(response.error || 'Failed to clear routes');
     }
 
-    // gNMI not commonly used for ACLs
-    throw new Error('Firewall configuration via gNMI not yet implemented');
-  }
-
-  /**
-   * Delete firewall rule
-   */
-  async deleteFirewallRule(ruleId: number): Promise<{ message: string }> {
-    if (this.useMock) {
-      const success = mockData.deleteMockFirewallRule(ruleId);
-      if (!success) {
-        throw new Error(`Firewall rule ${ruleId} not found`);
-      }
-      return { message: 'Firewall rule deleted successfully' };
-    }
-
-    return { message: 'Firewall rule deleted successfully' };
+    return { message: 'All routes cleared successfully via gNMI' };
   }
 }
 
