@@ -88,7 +88,7 @@ The API will be available at `http://localhost:3000`
 
 Once the server is running, visit `http://localhost:3000/docs` for interactive Swagger documentation.
 
-## Quick Start Workflow
+## Testing Workflow
 
 Follow these steps to get started with the Network API Gateway:
 
@@ -137,7 +137,20 @@ curl -X POST http://localhost:3000/api/interfaces/ethernet-1/2 \
   }'
 ```
 
-### 4. Configure connected routing (bind interfaces)
+### 4. Configure host IP address and default routing
+```bash
+mise run enter-host1
+ip addr add 192.168.1.2/24 dev eth1
+ip link set eth1 up
+ip route replace default via 192.168.1.1
+
+mise run enter-host2
+ip addr add 192.168.2.2/24 dev eth1
+ip link set eth1 up
+ip route replace default via 192.168.2.1
+```
+
+### 5. Configure connected routing (bind interfaces)
 ```bash
 curl -X POST http://localhost:3000/api/routes \
   -H "Content-Type: application/json" \
@@ -147,13 +160,13 @@ curl -X POST http://localhost:3000/api/routes \
   }'
 ```
 
-### 5. View interfaces
+### 6. View interfaces
 ```bash
 curl -X GET http://localhost:3000/api/interfaces \
   -H "Authorization: Bearer <your_token>"
 ```
 
-### 6. View connected routes
+### 7. View connected routes
 ```bash
 curl -X GET http://localhost:3000/api/routes \
   -H "Authorization: Bearer <your_token>"
