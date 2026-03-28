@@ -5,9 +5,8 @@ REST API Gateway for network router management using gNMI protocol with Nokia SR
 ## Features
 
 - **Authentication**: JWT-based authentication with role-based access control
-- **Interfaces**: View and configure network interfaces (IP, description, admin-state, MTU)
-- **Routing**: Configure static routes, OSPF, BGP, and EIGRP
-- **Firewall**: Manage firewall rules
+- **Interfaces**: View and configure network interfaces (ethernet-1/1 to ethernet-1/58)
+- **Routing**: Configure connected routing by binding interfaces to network-instance
 - **Audit Logging**: Track all configuration changes
 - **Mock Mode**: Development without physical router
 
@@ -65,7 +64,7 @@ bun backend/src/db/seed.ts
 
 6. Configure environment:
 ```bash
-cp ./backend/.env.example ./backend/.env 
+cp ./backend/.env.example ./backend/.env
 # Edit .env with your settings
 ```
 
@@ -88,6 +87,77 @@ The API will be available at `http://localhost:3000`
 ## API Documentation
 
 Once the server is running, visit `http://localhost:3000/docs` for interactive Swagger documentation.
+
+## Quick Start Workflow
+
+Follow these steps to get started with the Network API Gateway:
+
+### 1. Login and get JWT token
+```bash
+curl -X POST http://localhost:3000/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{
+    "username": "admin",
+    "password": "admin123"
+  }'
+```
+**Response:** Copy the `token` from the response for use in subsequent requests.
+
+### 2. Configure router connection
+```bash
+curl -X POST http://localhost:3000/api/config/router \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <your_token>" \
+  -d '{
+    "ip": "172.20.20.2",
+    "port": 57400,
+    "user": "admin",
+    "pass": "NokiaSrl1!"
+  }'
+```
+
+### 3. Configure interfaces with IP addresses
+```bash
+# Configure ethernet-1/1
+curl -X POST http://localhost:3000/api/interfaces/ethernet-1/1 \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <your_token>" \
+  -d '{
+    "ip": "192.168.1.1/24",
+    "description": "to host1"
+  }'
+
+# Configure ethernet-1/2
+curl -X POST http://localhost:3000/api/interfaces/ethernet-1/2 \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <your_token>" \
+  -d '{
+    "ip": "192.168.2.1/24",
+    "description": "to host2"
+  }'
+```
+
+### 4. Configure connected routing (bind interfaces)
+```bash
+curl -X POST http://localhost:3000/api/routes \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <your_token>" \
+  -d '{
+    "interfaces": ["ethernet-1/1", "ethernet-1/2"]
+  }'
+```
+
+### 5. View interfaces
+```bash
+curl -X GET http://localhost:3000/api/interfaces \
+  -H "Authorization: Bearer <your_token>"
+```
+
+### 6. View connected routes
+```bash
+curl -X GET http://localhost:3000/api/routes \
+  -H "Authorization: Bearer <your_token>"
+```
 
 ## Default Users
 
@@ -134,22 +204,46 @@ curl -X POST http://localhost:3000/api/config/router \
 ### Interfaces
 
 - `GET /api/interfaces` - Get all interface configurations
-
-- `GET /api/interfaces` - Get all interface configurations
 - `GET /api/interfaces/:name` - Get specific interface configuration
 - `POST /api/interfaces/:name` - Configure an interface (IP, description, admin-state, MTU)
 
+**Example: Configure interface**
+```bash
+curl -X POST http://localhost:3000/api/interfaces/ethernet-1/1 \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <your_token>" \
+  -d '{
+    "ip": "192.168.1.1/24",
+    "description": "to host1"
+  }'
+```
+
 ### Routing
 
-- `GET /api/routes` - Get routing table
-- `POST /api/routes` - Configure routing (Static, OSPF, BGP, EIGRP)
-- `DELETE /api/routes` - Delete a route
+- `GET /api/routes` - Get connected routes
+- `POST /api/routes` - Configure connected routing (bind interfaces to network-instance)
+- `DELETE /api/routes` - Clear all routing (unbind all interfaces)
 
-### Firewall
+**Example: Configure connected routing**
+```bash
+curl -X POST http://localhost:3000/api/routes \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <your_token>" \
+  -d '{
+    "interfaces": ["ethernet-1/1", "ethernet-1/2"]
+  }'
+```
 
-- `GET /api/firewall` - Get all firewall rules
-- `POST /api/firewall` - Configure a firewall rule
-- `DELETE /api/firewall/:ruleId` - Delete a firewall rule
+### Audit
+
+- `GET /api/audit-logs` - Get audit logs (all users can view)
+- `GET /api/config-history` - Get configuration history (all users can view)
+
+**Query Parameters (optional):**
+- `action` - Filter by action (e.g., `get_interfaces`, `configure_route`)
+- `resource_type` - Filter by resource type (e.g., `interface`, `route`)
+- `limit` - Number of results to return (default: 100)
+- `offset` - Number of results to skip (default: 0)
 
 ### Health
 
@@ -274,7 +368,7 @@ backend/src/
 │   ├── auth.routes.ts     # Authentication routes
 │   ├── interface.routes.ts
 │   ├── routing.routes.ts
-│   ├── firewall.routes.ts
+│   ├── audit.routes.ts    # Audit logs and config history routes
 │   └── health.routes.ts   # Health check routes
 ├── services/
 │   ├── network-service.ts # Main service layer
