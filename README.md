@@ -422,3 +422,11 @@ backend/src/
   "mtu": 9232
 }
 ```
+
+## AI Agent Credits
+
+This project was developed with assistance from AI tools:
+
+- **Backend Service**: Claude Code (API usage provided by z.ai GLM4.7)
+- **gNMI Command-line Problem Solving & Implementation Planning**: Gemini 3, GPT 5.4
+
